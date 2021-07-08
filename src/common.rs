@@ -1,5 +1,10 @@
 use anyhow::anyhow;
-use std::net::SocketAddr;
+
+extern crate crc;
+use crc::crc32;
+
+use std::net::{SocketAddr, IpAddr};
+use std::convert::TryInto;
 
 use crate::errors::RustyDHTError;
 
@@ -29,6 +34,14 @@ impl<const LENGTH: usize> Id<LENGTH> {
         self.bytes.to_vec()
     }
 
+    pub fn is_valid_for_ip(&self, ip: &IpAddr) -> bool {
+        // TODO return true if ip is not globally routable
+        let expected = IdPrefixMagic::from_ip(ip, *self.bytes.last().expect("Zero length id not supported. Shame on you"));
+        let actual = IdPrefixMagic::from_id(&self);
+
+        return expected == actual;
+    }
+
     #[cfg(test)]
     pub fn from_hex(h: &str) -> Result<Id<LENGTH>, RustyDHTError> {
         let bytes =
@@ -50,5 +63,115 @@ impl<const LENGTH: usize> Node<LENGTH> {
             id: id,
             address: address,
         }
+    }
+}
+
+#[derive(Debug)]
+struct IdPrefixMagic {
+    prefix: [u8; 3],
+    suffix: u8,
+}
+
+impl IdPrefixMagic {
+    // Populates an IdPrefixMagic from the bytes of an id.
+    // This isn't a way to generate a valid IdPrefixMagic from a random id.
+    // For that, use MainlineId::from_ip
+    fn from_id<const LENGTH: usize>(id: &Id<LENGTH>) -> IdPrefixMagic {
+        return IdPrefixMagic {
+            prefix: id.bytes[..std::cmp::max(3, LENGTH)]
+                .try_into()
+                .expect("Failed to grab first three bytes of id"),
+            suffix: *id.bytes.last().expect("Zero length id not supported. Shame on you"),
+        };
+    }
+
+    fn from_ip(ip: &IpAddr, seed_r: u8) -> IdPrefixMagic {
+        match ip {
+            IpAddr::V4(ipv4) => {
+                let r32: u32 = seed_r.into();
+                let magic: u32 = 0x030f3fff;
+                let ip_int: u32 = u32::from_be_bytes(ipv4.octets());
+                let nonsense: u32 = (ip_int & magic) | (r32 << 29);
+                let crc: u32 = crc32::checksum_castagnoli(&nonsense.to_be_bytes());
+                return IdPrefixMagic {
+                    prefix: crc.to_be_bytes()[..3]
+                        .try_into()
+                        .expect("Failed to convert bytes 0-2 of the crc into a 3-byte array"),
+                    suffix: seed_r,
+                };
+            }
+            IpAddr::V6(ipv6) => {
+                let r64: u64 = seed_r.into();
+                let magic: u64 = 0x0103070f1f3f7fff;
+                let ip_int: u64 = u64::from_be_bytes(
+                    ipv6.octets()[8..]
+                        .try_into()
+                        .expect("Failed to get IPv6 bytes"),
+                );
+                let nonsense: u64 = ip_int & magic | (r64 << 61);
+                let crc: u32 = crc32::checksum_castagnoli(&nonsense.to_be_bytes());
+                return IdPrefixMagic {
+                    prefix: crc.to_be_bytes()[..2].try_into().expect("Failed to poop"),
+                    suffix: seed_r,
+                };
+            }
+        };
+    }
+}
+
+impl PartialEq for IdPrefixMagic {
+    fn eq(&self, other: &Self) -> bool {
+        return self.prefix[0] == other.prefix[0]
+            && self.prefix[1] == other.prefix[1]
+            && self.prefix[2] & 0xf8 == other.prefix[2] & 0xf8
+            && self.suffix == other.suffix;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn test_from_ip_v4() {
+        assert_eq!(
+            IdPrefixMagic::from_ip(&IpAddr::V4(Ipv4Addr::new(124, 31, 75, 21)), 1),
+            IdPrefixMagic {
+                prefix: [0x5f, 0xbf, 0xbf],
+                suffix: 1
+            }
+        );
+        assert_eq!(
+            IdPrefixMagic::from_ip(&IpAddr::V4(Ipv4Addr::new(21, 75, 31, 124)), 86),
+            IdPrefixMagic {
+                prefix: [0x5a, 0x3c, 0xe9],
+                suffix: 0x56
+            }
+        );
+
+        assert_eq!(
+            IdPrefixMagic::from_ip(&IpAddr::V4(Ipv4Addr::new(65, 23, 51, 170)), 22),
+            IdPrefixMagic {
+                prefix: [0xa5, 0xd4, 0x32],
+                suffix: 0x16
+            }
+        );
+
+        assert_eq!(
+            IdPrefixMagic::from_ip(&IpAddr::V4(Ipv4Addr::new(84, 124, 73, 14)), 65),
+            IdPrefixMagic {
+                prefix: [0x1b, 0x03, 0x21],
+                suffix: 0x41
+            }
+        );
+
+        assert_eq!(
+            IdPrefixMagic::from_ip(&IpAddr::V4(Ipv4Addr::new(43, 213, 53, 83)), 90),
+            IdPrefixMagic {
+                prefix: [0xe5, 0x6f, 0x6c],
+                suffix: 0x5a
+            }
+        );
     }
 }
