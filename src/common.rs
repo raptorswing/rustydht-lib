@@ -3,6 +3,8 @@ use anyhow::anyhow;
 extern crate crc;
 use crc::crc32;
 
+use rand::prelude::*;
+
 use std::net::{SocketAddr, IpAddr};
 use std::convert::TryInto;
 
@@ -28,6 +30,29 @@ impl<const LENGTH: usize> Id<LENGTH> {
         }
 
         Ok(Id { bytes: tmp })
+    }
+
+    pub fn from_ip(ip: &IpAddr) -> Id<LENGTH> {
+        if LENGTH < 3 {
+            // TODO cleanup when const generics support specialization, I guess...
+            panic!("This function requires id of at least 3 bytes");
+        }
+        let mut rng = thread_rng();
+        let r: u8 = rng.gen();
+
+        let magic_prefix = IdPrefixMagic::from_ip(&ip, r);
+
+        let mut bytes = [0; LENGTH];
+
+        bytes[0] = magic_prefix.prefix[0];
+        bytes[1] = magic_prefix.prefix[1];
+        bytes[2] = (magic_prefix.prefix[2] & 0xf8) | (rng.gen::<u8>() & 0x7);
+        for i in 3..LENGTH-1 {
+            bytes[i] = rng.gen();
+        }
+        bytes[LENGTH-1] = r;
+
+        return Id { bytes: bytes };
     }
 
     pub fn to_vec(&self) -> Vec<u8> {
@@ -77,8 +102,13 @@ impl IdPrefixMagic {
     // This isn't a way to generate a valid IdPrefixMagic from a random id.
     // For that, use MainlineId::from_ip
     fn from_id<const LENGTH: usize>(id: &Id<LENGTH>) -> IdPrefixMagic {
+        if LENGTH < 3 {
+            // TODO cleanup when const generics support specialization, I guess...
+            panic!("This function requires id of at least 3 bytes");
+        }
+
         return IdPrefixMagic {
-            prefix: id.bytes[..std::cmp::max(3, LENGTH)]
+            prefix: id.bytes[..3]
                 .try_into()
                 .expect("Failed to grab first three bytes of id"),
             suffix: *id.bytes.last().expect("Zero length id not supported. Shame on you"),
@@ -173,5 +203,12 @@ mod tests {
                 suffix: 0x5a
             }
         );
+    }
+
+    #[test]
+    fn test_generate_valid_id() {
+        let ip = IpAddr::V4(Ipv4Addr::new(124, 31, 75, 21));
+        let id = Id::<20>::from_ip(&ip);
+        assert!(id.is_valid_for_ip(&ip));
     }
 }
