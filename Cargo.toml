@@ -8,6 +8,7 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0"
+crc = "^1.0.0"
 serde_bencode = "^0.2.3"
 serde = { version = "^1.0.0", features = ["derive"] }
 serde_bytes = "0.11"
