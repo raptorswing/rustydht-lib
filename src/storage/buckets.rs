@@ -2,20 +2,20 @@ use crate::common::Id;
 use std::time::Instant;
 
 pub trait Bucketable {
-    fn get_id(&self) -> MainlineId;
+    fn get_id(&self) -> Id;
 
     fn get_first_seen(&self) -> Instant;
 }
 
 pub struct Buckets<T: Bucketable> {
-    our_id: MainlineId,
+    our_id: Id,
     buckets: Vec<Vec<T>>,
 
     k: usize,
 }
 
 impl<T: Bucketable> Buckets<T> {
-    pub fn new(our_id: MainlineId, k: usize) -> Buckets<T> {
+    pub fn new(our_id: Id, k: usize) -> Buckets<T> {
         let mut to_ret = Buckets {
             our_id: our_id,
             buckets: Vec::with_capacity(32),
@@ -56,7 +56,7 @@ impl<T: Bucketable> Buckets<T> {
         self.buckets.len()
     }
 
-    pub fn get_mut(&mut self, id: &MainlineId) -> Option<&mut T> {
+    pub fn get_mut(&mut self, id: &Id) -> Option<&mut T> {
         let dest_bucket_idx = self.get_dest_bucket_idx_for_id(&id);
         if let Some(bucket) = self.buckets.get_mut(dest_bucket_idx) {
             for item in bucket.iter_mut() {
@@ -68,7 +68,7 @@ impl<T: Bucketable> Buckets<T> {
         None
     }
 
-    pub fn get_nearest_nodes(&self, id: &MainlineId, exclude: Option<&MainlineId>) -> Vec<&T> {
+    pub fn get_nearest_nodes(&self, id: &Id, exclude: Option<&Id>) -> Vec<&T> {
         let mut all: Vec<&T> = self
             .values()
             .iter()
@@ -96,7 +96,7 @@ impl<T: Bucketable> Buckets<T> {
         }
     }
 
-    pub fn remove(&mut self, id: &MainlineId) -> Option<T> {
+    pub fn remove(&mut self, id: &Id) -> Option<T> {
         let dest_bucket_idx = self.get_dest_bucket_idx_for_id(&id);
         if let Some(bucket) = self.buckets.get_mut(dest_bucket_idx) {
             for i in 0..bucket.len() {
@@ -108,7 +108,7 @@ impl<T: Bucketable> Buckets<T> {
         None
     }
 
-    pub fn set_id(&mut self, new_id: MainlineId) {
+    pub fn set_id(&mut self, new_id: Id) {
         self.clear();
         self.our_id = new_id;
     }
@@ -127,7 +127,7 @@ impl<T: Bucketable> Buckets<T> {
         self.get_dest_bucket_idx_for_id(&item.get_id())
     }
 
-    fn get_dest_bucket_idx_for_id(&self, id: &MainlineId) -> usize {
+    fn get_dest_bucket_idx_for_id(&self, id: &Id) -> usize {
         std::cmp::min(self.buckets.len() - 1, self.our_id.matching_prefix_bits(id))
     }
 
@@ -185,12 +185,12 @@ mod tests {
     extern crate rand_chacha;
 
     struct TestWrapper {
-        id: MainlineId,
+        id: Id,
         first_seen: Instant,
     }
 
     impl TestWrapper {
-        pub fn new(id: MainlineId, first_seen: Option<Instant>) -> TestWrapper {
+        pub fn new(id: Id, first_seen: Option<Instant>) -> TestWrapper {
             let fs = if let Some(first_seen) = first_seen {
                 first_seen
             } else {
@@ -205,7 +205,7 @@ mod tests {
     }
 
     impl Bucketable for TestWrapper {
-        fn get_id(&self) -> MainlineId {
+        fn get_id(&self) -> Id {
             self.id
         }
 
@@ -223,14 +223,14 @@ mod tests {
     /// Tests that items stay in the correct buckets as the number of buckets grows and that each bucket only contains the correct number of items
     #[test]
     fn test_correct_bucket() {
-        let id = MainlineId::from_hex("0000000000000000000000000000000000000000").unwrap();
+        let id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
         let mut storage = Buckets::new(id, 8);
 
         // Create RNG with static seed to ensure tests are reproducible
         let mut rng = Box::new(rand_chacha::ChaCha8Rng::seed_from_u64(50));
 
         for _ in 0..2000 {
-            let node_id = MainlineId::from_random(&mut rng);
+            let node_id = Id::from_random(&mut rng);
             storage.add(TestWrapper::new(node_id, None), None);
         }
 
@@ -251,10 +251,10 @@ mod tests {
     /// Tests that we can add and remove an item from the buckets.
     #[test]
     fn test_add_remove() {
-        let our_id = MainlineId::from_hex("0000000000000000000000000000000000000000").unwrap();
+        let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
         let mut storage = Buckets::new(our_id, 8);
 
-        let their_id = MainlineId::from_hex("0000000000000000000000000000000000000001").unwrap();
+        let their_id = Id::from_hex("0000000000000000000000000000000000000001").unwrap();
         storage.add(TestWrapper::new(their_id, None), None);
 
         assert!(storage.count() == 1);
@@ -268,62 +268,62 @@ mod tests {
     /// Tests that we only store a max of k items that have nothing in common with our id
     #[test]
     fn test_nothing_in_common() {
-        let our_id = MainlineId::from_hex("0000000000000000000000000000000000000000").unwrap();
+        let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
         let mut storage = Buckets::new(our_id, 8);
 
         // First 8 should be added
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("f000000000000000000000000000000000000000").unwrap(),
+                Id::from_hex("f000000000000000000000000000000000000000").unwrap(),
                 None,
             ),
             None,
         );
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("f000000000000000000000000000000000000001").unwrap(),
+                Id::from_hex("f000000000000000000000000000000000000001").unwrap(),
                 None,
             ),
             None,
         );
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("f000000000000000000000000000000000000010").unwrap(),
+                Id::from_hex("f000000000000000000000000000000000000010").unwrap(),
                 None,
             ),
             None,
         );
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("f000000000000000000000000000000000000011").unwrap(),
+                Id::from_hex("f000000000000000000000000000000000000011").unwrap(),
                 None,
             ),
             None,
         );
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("f000000000000000000000000000000000000100").unwrap(),
+                Id::from_hex("f000000000000000000000000000000000000100").unwrap(),
                 None,
             ),
             None,
         );
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("f000000000000000000000000000000000000101").unwrap(),
+                Id::from_hex("f000000000000000000000000000000000000101").unwrap(),
                 None,
             ),
             None,
         );
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("f000000000000000000000000000000000000110").unwrap(),
+                Id::from_hex("f000000000000000000000000000000000000110").unwrap(),
                 None,
             ),
             None,
         );
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("f000000000000000000000000000000000000111").unwrap(),
+                Id::from_hex("f000000000000000000000000000000000000111").unwrap(),
                 None,
             ),
             None,
@@ -333,156 +333,156 @@ mod tests {
         // This one should not be added
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("f000000000000000000000000000000000001000").unwrap(),
+                Id::from_hex("f000000000000000000000000000000000001000").unwrap(),
                 None,
             ),
             None,
         );
         assert_eq!(storage.buckets[0].len(), 8);
         assert!(storage
-            .get_mut(&MainlineId::from_hex("f000000000000000000000000000000000001000").unwrap())
+            .get_mut(&Id::from_hex("f000000000000000000000000000000000001000").unwrap())
             .is_none());
     }
 
     /// Test that get_nearest works
     #[test]
     fn test_get_nearest_nodes() {
-        let our_id = MainlineId::from_hex("0000000000000000000000000000000000000000").unwrap();
+        let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
         let mut storage = Buckets::new(our_id, 8);
 
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("0000000000000000000000000000000000000001").unwrap(),
+                Id::from_hex("0000000000000000000000000000000000000001").unwrap(),
                 None,
             ),
             None,
         );
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("0000000000000000000000000000000000000010").unwrap(),
+                Id::from_hex("0000000000000000000000000000000000000010").unwrap(),
                 None,
             ),
             None,
         );
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("0000000000000000000000000000000000000011").unwrap(),
+                Id::from_hex("0000000000000000000000000000000000000011").unwrap(),
                 None,
             ),
             None,
         );
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("0000000000000000000000000000000000000100").unwrap(),
+                Id::from_hex("0000000000000000000000000000000000000100").unwrap(),
                 None,
             ),
             None,
         );
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("0000000000000000000000000000000000000101").unwrap(),
+                Id::from_hex("0000000000000000000000000000000000000101").unwrap(),
                 None,
             ),
             None,
         );
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("0000000000000000000000000000000000000110").unwrap(),
+                Id::from_hex("0000000000000000000000000000000000000110").unwrap(),
                 None,
             ),
             None,
         );
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("0000000000000000000000000000000000000111").unwrap(),
+                Id::from_hex("0000000000000000000000000000000000000111").unwrap(),
                 None,
             ),
             None,
         );
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("0000000000000000000000000000000000001000").unwrap(),
+                Id::from_hex("0000000000000000000000000000000000001000").unwrap(),
                 None,
             ),
             None,
         );
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("0000000000000000000000000000000000001001").unwrap(),
+                Id::from_hex("0000000000000000000000000000000000001001").unwrap(),
                 None,
             ),
             None,
         );
 
         let nearest = storage.get_nearest_nodes(
-            &MainlineId::from_hex("ffffffffffffffffffffffffffffffffffffffff").unwrap(),
+            &Id::from_hex("ffffffffffffffffffffffffffffffffffffffff").unwrap(),
             None,
         );
         assert_eq!(nearest.len(), 8);
         assert_eq!(
             nearest[0].get_id(),
-            MainlineId::from_hex("0000000000000000000000000000000000001001").unwrap()
+            Id::from_hex("0000000000000000000000000000000000001001").unwrap()
         );
 
         let nearest = storage.get_nearest_nodes(
-            &MainlineId::from_hex("0000000000000000000000000000000000000000").unwrap(),
+            &Id::from_hex("0000000000000000000000000000000000000000").unwrap(),
             None,
         );
         assert_eq!(nearest.len(), 8);
         assert_eq!(
             nearest[0].get_id(),
-            MainlineId::from_hex("0000000000000000000000000000000000000001").unwrap()
+            Id::from_hex("0000000000000000000000000000000000000001").unwrap()
         );
     }
 
     #[test]
     fn test_get_nearest_nodes2() {
-        let our_id = MainlineId::from_hex("0000000000000000000000000000000000000000").unwrap();
+        let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
         let mut storage = Buckets::new(our_id, 8);
 
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("5fcb695a07ad50be46f100000000000000000000").unwrap(),
+                Id::from_hex("5fcb695a07ad50be46f100000000000000000000").unwrap(),
                 None,
             ),
             None,
         );
         storage.add(
             TestWrapper::new(
-                MainlineId::from_hex("00000000000000000000fada4cd3cf6225373cb7").unwrap(),
+                Id::from_hex("00000000000000000000fada4cd3cf6225373cb7").unwrap(),
                 None,
             ),
             None,
         );
 
         let nearest = storage.get_nearest_nodes(
-            &MainlineId::from_hex("5fcb695a07ad50be46f1fada4cd3cf6225373cb7").unwrap(),
+            &Id::from_hex("5fcb695a07ad50be46f1fada4cd3cf6225373cb7").unwrap(),
             None,
         );
         assert_eq!(nearest.len(), 2);
         assert_eq!(
             nearest[0].get_id(),
-            MainlineId::from_hex("5fcb695a07ad50be46f100000000000000000000").unwrap()
+            Id::from_hex("5fcb695a07ad50be46f100000000000000000000").unwrap()
         );
 
         let nearest = storage.get_nearest_nodes(
-            &MainlineId::from_hex("0000000000000000000000000000000000000000").unwrap(),
+            &Id::from_hex("0000000000000000000000000000000000000000").unwrap(),
             None,
         );
         assert_eq!(nearest.len(), 2);
         assert_eq!(
             nearest[0].get_id(),
-            MainlineId::from_hex("00000000000000000000fada4cd3cf6225373cb7").unwrap()
+            Id::from_hex("00000000000000000000fada4cd3cf6225373cb7").unwrap()
         );
 
         let nearest = storage.get_nearest_nodes(
-            &MainlineId::from_hex("ffffffffffffffffffffffffffffffffffffffff").unwrap(),
+            &Id::from_hex("ffffffffffffffffffffffffffffffffffffffff").unwrap(),
             None,
         );
         assert_eq!(nearest.len(), 2);
         assert_eq!(
             nearest[0].get_id(),
-            MainlineId::from_hex("5fcb695a07ad50be46f100000000000000000000").unwrap()
+            Id::from_hex("5fcb695a07ad50be46f100000000000000000000").unwrap()
         );
     }
 }
