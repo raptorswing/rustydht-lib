@@ -9,7 +9,6 @@ edition = "2018"
 [dependencies]
 anyhow = "1.0"
 crc = "^1.0.0"
-lru = "0.6.5"
 rand = "0.8.0"
 serde_bencode = "^0.2.3"
 serde = { version = "^1.0.0", features = ["derive"] }
