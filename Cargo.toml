@@ -18,3 +18,4 @@ thiserror = "1.0.25"
 
 [dev-dependencies]
 hex = "0.4"
+rand_chacha = "0.3.0"
