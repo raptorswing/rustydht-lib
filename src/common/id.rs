@@ -10,47 +10,45 @@ use std::convert::TryInto;
 
 use crate::errors::RustyDHTError;
 
+pub const ID_SIZE: usize = 20;
+
 #[derive(Debug, PartialEq)]
-pub struct Id<const LENGTH: usize> {
-    bytes: [u8; LENGTH],
+pub struct Id {
+    bytes: [u8; ID_SIZE],
 }
 
-impl<const LENGTH: usize> Id<LENGTH> {
-    pub fn from_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<Id<LENGTH>, RustyDHTError> {
+impl Id {
+    pub fn from_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<Id, RustyDHTError> {
         let bytes = bytes.as_ref();
-        if bytes.len() != LENGTH {
+        if bytes.len() != ID_SIZE {
             return Err(RustyDHTError::PacketParseError(anyhow!(
                 "Wrong number of bytes"
             )));
         }
 
-        let mut tmp: [u8; LENGTH] = [0; LENGTH];
-        for i in 0..LENGTH {
+        let mut tmp: [u8; ID_SIZE] = [0; ID_SIZE];
+        for i in 0..ID_SIZE {
             tmp[i] = bytes[i];
         }
 
         Ok(Id { bytes: tmp })
     }
 
-    pub fn from_ip(ip: &IpAddr) -> Id<LENGTH> {
-        if LENGTH < 3 {
-            // TODO cleanup when const generics support specialization, I guess...
-            panic!("This function requires id of at least 3 bytes");
-        }
+    pub fn from_ip(ip: &IpAddr) -> Id {
         let mut rng = thread_rng();
         let r: u8 = rng.gen();
 
         let magic_prefix = IdPrefixMagic::from_ip(&ip, r);
 
-        let mut bytes = [0; LENGTH];
+        let mut bytes = [0; ID_SIZE];
 
         bytes[0] = magic_prefix.prefix[0];
         bytes[1] = magic_prefix.prefix[1];
         bytes[2] = (magic_prefix.prefix[2] & 0xf8) | (rng.gen::<u8>() & 0x7);
-        for i in 3..LENGTH-1 {
+        for i in 3..ID_SIZE-1 {
             bytes[i] = rng.gen();
         }
-        bytes[LENGTH-1] = r;
+        bytes[ID_SIZE-1] = r;
 
         return Id { bytes: bytes };
     }
@@ -61,14 +59,14 @@ impl<const LENGTH: usize> Id<LENGTH> {
 
     pub fn is_valid_for_ip(&self, ip: &IpAddr) -> bool {
         // TODO return true if ip is not globally routable
-        let expected = IdPrefixMagic::from_ip(ip, *self.bytes.last().expect("Zero length id not supported. Shame on you"));
+        let expected = IdPrefixMagic::from_ip(ip, self.bytes[ID_SIZE-1]);
         let actual = IdPrefixMagic::from_id(&self);
 
         return expected == actual;
     }
 
     #[cfg(test)]
-    pub fn from_hex(h: &str) -> Result<Id<LENGTH>, RustyDHTError> {
+    pub fn from_hex(h: &str) -> Result<Id, RustyDHTError> {
         let bytes =
             hex::decode(h).map_err(|hex_err| RustyDHTError::PacketParseError(hex_err.into()))?;
 
@@ -77,13 +75,13 @@ impl<const LENGTH: usize> Id<LENGTH> {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Node<const LENGTH: usize> {
-    pub id: Id<LENGTH>,
+pub struct Node {
+    pub id: Id,
     pub address: SocketAddr,
 }
 
-impl<const LENGTH: usize> Node<LENGTH> {
-    pub fn new(id: Id<LENGTH>, address: SocketAddr) -> Node<LENGTH> {
+impl Node {
+    pub fn new(id: Id, address: SocketAddr) -> Node {
         Node {
             id: id,
             address: address,
@@ -101,17 +99,12 @@ impl IdPrefixMagic {
     // Populates an IdPrefixMagic from the bytes of an id.
     // This isn't a way to generate a valid IdPrefixMagic from a random id.
     // For that, use MainlineId::from_ip
-    fn from_id<const LENGTH: usize>(id: &Id<LENGTH>) -> IdPrefixMagic {
-        if LENGTH < 3 {
-            // TODO cleanup when const generics support specialization, I guess...
-            panic!("This function requires id of at least 3 bytes");
-        }
-
+    fn from_id(id: &Id) -> IdPrefixMagic {
         return IdPrefixMagic {
             prefix: id.bytes[..3]
                 .try_into()
                 .expect("Failed to grab first three bytes of id"),
-            suffix: *id.bytes.last().expect("Zero length id not supported. Shame on you"),
+            suffix: id.bytes[ID_SIZE-1],
         };
     }
 
@@ -208,7 +201,7 @@ mod tests {
     #[test]
     fn test_generate_valid_id() {
         let ip = IpAddr::V4(Ipv4Addr::new(124, 31, 75, 21));
-        let id = Id::<20>::from_ip(&ip);
+        let id = Id::from_ip(&ip);
         assert!(id.is_valid_for_ip(&ip));
     }
 }
