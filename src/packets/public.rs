@@ -1,5 +1,5 @@
 use crate::errors;
-use crate::common::{Id, Node};
+use crate::common::{Id, Node, ID_SIZE};
 
 use super::internal;
 
@@ -11,74 +11,74 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 const MAX_SCRAPE_INTERVAL: u64 = 21600; // 6 hours
 
 #[derive(Debug, PartialEq)]
-pub enum Message<const ID_SIZE: usize> {
-    Request(RequestSpecific<ID_SIZE>),
+pub enum Message {
+    Request(RequestSpecific),
 
-    Response(ResponseSpecific<ID_SIZE>),
+    Response(ResponseSpecific),
 
     Error(ErrorSpecific),
 }
 
 #[derive(Debug, PartialEq)]
-pub enum RequestSpecific<const ID_SIZE: usize> {
-    PingRequest(PingRequestArguments<ID_SIZE>),
+pub enum RequestSpecific {
+    PingRequest(PingRequestArguments),
 
-    FindNodeRequest(FindNodeRequestArguments<ID_SIZE>),
+    FindNodeRequest(FindNodeRequestArguments),
 
-    GetPeersRequest(GetPeersRequestArguments<ID_SIZE>),
+    GetPeersRequest(GetPeersRequestArguments),
 
-    SampleInfoHashesRequest(SampleInfoHashesRequestArguments<ID_SIZE>),
+    SampleInfoHashesRequest(SampleInfoHashesRequestArguments),
 
-    AnnouncePeerRequest(AnnouncePeerRequestArguments<ID_SIZE>),
+    AnnouncePeerRequest(AnnouncePeerRequestArguments),
 }
 
 #[derive(Debug, PartialEq)]
-pub enum ResponseSpecific<const ID_SIZE: usize> {
-    PingResponse(PingResponseArguments<ID_SIZE>),
+pub enum ResponseSpecific {
+    PingResponse(PingResponseArguments),
 
-    FindNodeResponse(FindNodeResponseArguments<ID_SIZE>),
+    FindNodeResponse(FindNodeResponseArguments),
 
-    GetPeersResponse(GetPeersResponseArguments<ID_SIZE>),
+    GetPeersResponse(GetPeersResponseArguments),
 
-    SampleInfoHashesResponse(SampleInfoHashesResponseArguments<ID_SIZE>),
+    SampleInfoHashesResponse(SampleInfoHashesResponseArguments),
     // AnnouncePeerResponse not needed - same as PingResponse
 }
 
 #[derive(Debug, PartialEq)]
-pub struct PingRequestArguments<const ID_SIZE: usize> {
-    requester_id: Id<ID_SIZE>,
+pub struct PingRequestArguments {
+    requester_id: Id,
     transaction_id: Vec<u8>,
     requester_version: Option<Vec<u8>>,
 }
 
 #[derive(Debug, PartialEq)]
-pub struct FindNodeRequestArguments<const ID_SIZE: usize> {
-    target: Id<ID_SIZE>,
-    requester_id: Id<ID_SIZE>,
+pub struct FindNodeRequestArguments {
+    target: Id,
+    requester_id: Id,
     transaction_id: Vec<u8>,
     requester_version: Option<Vec<u8>>,
 }
 
 #[derive(Debug, PartialEq)]
-pub struct GetPeersRequestArguments<const ID_SIZE: usize> {
-    info_hash: Id<ID_SIZE>,
-    requester_id: Id<ID_SIZE>,
+pub struct GetPeersRequestArguments {
+    info_hash: Id,
+    requester_id: Id,
     transaction_id: Vec<u8>,
     requester_version: Option<Vec<u8>>,
 }
 
 #[derive(Debug, PartialEq)]
-pub struct SampleInfoHashesRequestArguments<const ID_SIZE: usize> {
-    target: Id<ID_SIZE>,
-    requester_id: Id<ID_SIZE>,
+pub struct SampleInfoHashesRequestArguments {
+    target: Id,
+    requester_id: Id,
     transaction_id: Vec<u8>,
     requester_version: Option<Vec<u8>>,
 }
 
 #[derive(Debug, PartialEq)]
-pub struct AnnouncePeerRequestArguments<const ID_SIZE: usize> {
-    requester_id: Id<ID_SIZE>,
-    info_hash: Id<ID_SIZE>,
+pub struct AnnouncePeerRequestArguments {
+    requester_id: Id,
+    info_hash: Id,
     port: u16,
     implied_port: Option<bool>,
     token: Vec<u8>,
@@ -87,54 +87,54 @@ pub struct AnnouncePeerRequestArguments<const ID_SIZE: usize> {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum GetPeersResponseValues<const ID_SIZE: usize> {
-    Nodes(Vec<Node<ID_SIZE>>),
+pub enum GetPeersResponseValues {
+    Nodes(Vec<Node>),
     Peers(Vec<SocketAddr>),
 }
 
 #[derive(Debug, PartialEq)]
-pub struct PingResponseArguments<const ID_SIZE: usize> {
-    responder_id: Id<ID_SIZE>,
+pub struct PingResponseArguments {
+    responder_id: Id,
     transaction_id: Vec<u8>,
     responder_version: Option<Vec<u8>>,
     requester_ip: Option<SocketAddr>,
 }
 
 #[derive(Debug, PartialEq)]
-pub struct FindNodeResponseArguments<const ID_SIZE: usize> {
-    responder_id: Id<ID_SIZE>,
+pub struct FindNodeResponseArguments {
+    responder_id: Id,
     transaction_id: Vec<u8>,
     responder_version: Option<Vec<u8>>,
     requester_ip: Option<SocketAddr>,
-    nodes: Vec<Node<ID_SIZE>>,
+    nodes: Vec<Node>,
 }
 
 #[derive(Debug, PartialEq)]
-pub struct GetPeersResponseArguments<const ID_SIZE: usize> {
-    responder_id: Id<ID_SIZE>,
+pub struct GetPeersResponseArguments {
+    responder_id: Id,
     transaction_id: Vec<u8>,
     responder_version: Option<Vec<u8>>,
     requester_ip: Option<SocketAddr>,
     token: Vec<u8>,
-    values: GetPeersResponseValues<ID_SIZE>,
+    values: GetPeersResponseValues,
 }
 
 #[derive(Debug, PartialEq)]
-pub struct SampleInfoHashesResponseArguments<const ID_SIZE: usize> {
-    responder_id: Id<ID_SIZE>,
+pub struct SampleInfoHashesResponseArguments {
+    responder_id: Id,
     transaction_id: Vec<u8>,
     responder_version: Option<Vec<u8>>,
     requester_ip: Option<SocketAddr>,
     interval: std::time::Duration,
-    nodes: Vec<Node<ID_SIZE>>,
-    samples: Vec<Id<ID_SIZE>>,
+    nodes: Vec<Node>,
+    samples: Vec<Id>,
     num: i32,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum ErrorSpecific {}
 
-impl<const ID_SIZE: usize> Message<ID_SIZE> {
+impl Message {
     fn to_serde_message(&self) -> internal::DHTMessage {
         match &self {
             Message::Request(req) => match req {
@@ -322,7 +322,7 @@ impl<const ID_SIZE: usize> Message<ID_SIZE> {
 
     fn from_serde_message(
         msg: &internal::DHTMessage,
-    ) -> Result<Message<ID_SIZE>, errors::RustyDHTError> {
+    ) -> Result<Message, errors::RustyDHTError> {
         match &msg.variant {
             internal::DHTMessageVariant::DHTRequest(request_variant) => match request_variant {
                 internal::DHTRequestSpecific::DHTPingRequest { arguments } => Ok(Message::Request(
@@ -470,7 +470,7 @@ impl<const ID_SIZE: usize> Message<ID_SIZE> {
 
                                     for i in 0..num_expected {
                                         let i = i * ID_SIZE;
-                                        let id = Id::<ID_SIZE>::from_bytes(&arguments.samples[i..i+ID_SIZE])?;
+                                        let id = Id::from_bytes(&arguments.samples[i..i+ID_SIZE])?;
                                         to_ret.push(id);
                                     }
 
@@ -492,7 +492,7 @@ impl<const ID_SIZE: usize> Message<ID_SIZE> {
         self.to_serde_message().to_bytes()
     }
 
-    pub fn from_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<Message<ID_SIZE>, errors::RustyDHTError> {
+    pub fn from_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<Message, errors::RustyDHTError> {
         Message::from_serde_message(&internal::DHTMessage::from_bytes(bytes)?)
     }
 }
@@ -551,9 +551,9 @@ fn sockaddr_to_bytes(sockaddr: &SocketAddr) -> Vec<u8> {
     return to_ret;
 }
 
-fn bytes_to_nodes4<T: AsRef<[u8]>, const ID_SIZE: usize>(
+fn bytes_to_nodes4<T: AsRef<[u8]>>(
     bytes: T,
-) -> Result<Vec<Node<ID_SIZE>>, errors::RustyDHTError> {
+) -> Result<Vec<Node>, errors::RustyDHTError> {
     let bytes = bytes.as_ref();
     let node4_byte_size: usize = ID_SIZE + 6;
     if bytes.len() % node4_byte_size != 0 {
@@ -573,7 +573,7 @@ fn bytes_to_nodes4<T: AsRef<[u8]>, const ID_SIZE: usize>(
     Ok(to_ret)
 }
 
-fn nodes4_to_bytes<const ID_SIZE: usize>(nodes: &Vec<Node<ID_SIZE>>) -> Vec<u8> {
+fn nodes4_to_bytes(nodes: &Vec<Node>) -> Vec<u8> {
     let node4_byte_size: usize = ID_SIZE + 6;
     let mut to_ret = Vec::with_capacity(node4_byte_size * nodes.len());
     for node in nodes {
@@ -605,7 +605,7 @@ mod tests {
     #[test]
     fn test_ping_request() {
         let original_msg = Message::Request(RequestSpecific::PingRequest(PingRequestArguments {
-            requester_id: Id::<2>::from_hex("f00f").unwrap(),
+            requester_id: Id::from_hex("f00ff00ff00ff00ff00ff00ff00ff00ff00ff00f").unwrap(),
             requester_version: None,
             transaction_id: vec![0, 1, 2],
         }));
@@ -613,7 +613,7 @@ mod tests {
         let serde_msg = original_msg.to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::<2>::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 
@@ -621,7 +621,7 @@ mod tests {
     fn test_ping_response() {
         let original_msg =
             Message::Response(ResponseSpecific::PingResponse(PingResponseArguments {
-                responder_id: Id::<2>::from_hex("beef").unwrap(),
+                responder_id: Id::from_hex("beefbeefbeefbeefbeefbeefbeefbeefbeefbeef").unwrap(),
                 transaction_id: vec![1, 2, 3],
                 responder_version: Some(vec![0xde, 0xad]),
                 requester_ip: Some("99.100.101.102:1030".parse().unwrap()),
@@ -630,7 +630,7 @@ mod tests {
         let serde_msg = original_msg.to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::<2>::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 
@@ -638,8 +638,8 @@ mod tests {
     fn test_get_peers_request() {
         let original_msg =
             Message::Request(RequestSpecific::GetPeersRequest(GetPeersRequestArguments {
-                info_hash: Id::<2>::from_hex("dead").unwrap(),
-                requester_id: Id::<2>::from_hex("beef").unwrap(),
+                info_hash: Id::from_hex("deaddeaddeaddeaddeaddeaddeaddeaddeaddead").unwrap(),
+                requester_id: Id::from_hex("beefbeefbeefbeefbeefbeefbeefbeefbeefbeef").unwrap(),
                 transaction_id: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
                 requester_version: Some(vec![72, 73]),
             }));
@@ -647,7 +647,7 @@ mod tests {
         let serde_msg = original_msg.to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::<2>::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 
@@ -655,13 +655,13 @@ mod tests {
     fn test_get_peers_response() {
         let original_msg = Message::Response(ResponseSpecific::GetPeersResponse(
             GetPeersResponseArguments {
-                responder_id: Id::<2>::from_hex("0505").unwrap(),
+                responder_id: Id::from_hex("0505050505050505050505050505050505050505").unwrap(),
                 transaction_id: vec![1, 2, 3],
                 responder_version: Some(vec![1]),
                 requester_ip: Some("50.51.52.53:5455".parse().unwrap()),
                 token: vec![99, 100, 101, 102],
                 values: GetPeersResponseValues::Nodes(vec![Node::new(
-                    Id::<2>::from_hex("0606").unwrap(),
+                    Id::from_hex("0606060606060606060606060606060606060606").unwrap(),
                     "49.50.52.52:5354".parse().unwrap(),
                 )]),
             },
@@ -670,7 +670,7 @@ mod tests {
         let serde_msg = original_msg.to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::<2>::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 
@@ -678,8 +678,8 @@ mod tests {
     fn test_find_node_request() {
         let original_msg =
             Message::Request(RequestSpecific::FindNodeRequest(FindNodeRequestArguments {
-                target: Id::<2>::from_hex("1234").unwrap(),
-                requester_id: Id::<2>::from_hex("5678").unwrap(),
+                target: Id::from_hex("1234123412341234123412341234123412341234").unwrap(),
+                requester_id: Id::from_hex("5678567856785678567856785678567856785678").unwrap(),
                 transaction_id: vec![1, 2, 3],
                 requester_version: Some(vec![0x62, 0x61, 0x72, 0x66]),
             }));
@@ -687,7 +687,7 @@ mod tests {
         let serde_msg = original_msg.to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::<2>::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 
@@ -695,12 +695,12 @@ mod tests {
     fn test_find_node_response() {
         let original_msg = Message::Response(ResponseSpecific::FindNodeResponse(
             FindNodeResponseArguments {
-                responder_id: Id::<2>::from_hex("0505").unwrap(),
+                responder_id: Id::from_hex("0505050505050505050505050505050505050505").unwrap(),
                 transaction_id: vec![1, 2, 3],
                 responder_version: Some(vec![1]),
                 requester_ip: Some("50.51.52.53:5455".parse().unwrap()),
                 nodes: vec![Node::new(
-                    Id::<2>::from_hex("0606").unwrap(),
+                    Id::from_hex("0606060606060606060606060606060606060606").unwrap(),
                     "49.50.52.52:5354".parse().unwrap(),
                 )],
             },
@@ -709,7 +709,7 @@ mod tests {
         let serde_msg = original_msg.to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::<2>::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 
@@ -717,20 +717,20 @@ mod tests {
     fn test_announce_peer_request() {
         let original_msg = Message::Request(RequestSpecific::AnnouncePeerRequest(
             AnnouncePeerRequestArguments {
-                requester_id: Id::<2>::from_hex("5678").unwrap(),
+                requester_id: Id::from_hex("5678567856785678567856785678567856785678").unwrap(),
                 transaction_id: vec![1, 2, 3],
                 requester_version: Some(vec![0x62, 0x61, 0x72, 0x66]),
                 port: 666,
                 implied_port: Some(false),
                 token: vec![42, 42, 42, 42],
-                info_hash: Id::<2>::from_hex("9899").unwrap(),
+                info_hash: Id::from_hex("9899989998999899989998999899989998999899").unwrap(),
             },
         ));
 
         let serde_msg = original_msg.to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::<2>::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 
@@ -738,17 +738,17 @@ mod tests {
     fn test_sample_info_hashes_request() {
         let original_msg = Message::Request(RequestSpecific::SampleInfoHashesRequest(
             SampleInfoHashesRequestArguments {
-                requester_id: Id::<2>::from_hex("5678").unwrap(),
+                requester_id: Id::from_hex("5678567856785678567856785678567856785678").unwrap(),
                 transaction_id: vec![1, 2, 3],
                 requester_version: Some(vec![0x62, 0x61, 0x72, 0x66]),
-                target: Id::<2>::from_hex("3344").unwrap(),
+                target: Id::from_hex("3344334433443344334433443344334433443344").unwrap(),
             },
         ));
 
         let serde_msg = original_msg.to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::<2>::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 
@@ -756,18 +756,18 @@ mod tests {
     fn test_sample_info_hashes_response() {
         let original_msg = Message::Response(ResponseSpecific::SampleInfoHashesResponse(
             SampleInfoHashesResponseArguments {
-                responder_id: Id::<2>::from_hex("0505").unwrap(),
+                responder_id: Id::from_hex("0505050505050505050505050505050505050505").unwrap(),
                 transaction_id: vec![1, 2, 3],
                 responder_version: Some(vec![1]),
                 requester_ip: Some("50.51.52.53:5455".parse().unwrap()),
                 interval: std::time::Duration::from_secs(32),
                 nodes: vec![Node::new(
-                    Id::<2>::from_hex("0606").unwrap(),
+                    Id::from_hex("0606060606060606060606060606060606060606").unwrap(),
                     "49.50.52.52:5354".parse().unwrap(),
                 )],
                 samples: vec![
-                    Id::<2>::from_hex("3232").unwrap(),
-                    Id::<2>::from_hex("3434").unwrap(),
+                    Id::from_hex("3232323232323232323232323232323232323232").unwrap(),
+                    Id::from_hex("3434343434343434343434343434343434343434").unwrap(),
                 ],
                 num: 300,
             },
@@ -776,7 +776,7 @@ mod tests {
         let serde_msg = original_msg.to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::<2>::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 }
