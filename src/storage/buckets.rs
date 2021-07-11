@@ -77,8 +77,8 @@ impl<T: Bucketable> Buckets<T> {
             .collect();
 
         all.sort_unstable_by(|a, b| {
-            let a_dist = a.get_id() ^ *id;
-            let b_dist = b.get_id() ^ *id;
+            let a_dist = a.get_id().xor(id);
+            let b_dist = b.get_id().xor(id);
             a_dist.partial_cmp(&b_dist).unwrap()
         });
 

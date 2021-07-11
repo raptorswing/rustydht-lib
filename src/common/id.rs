@@ -5,8 +5,8 @@ use crc::crc32;
 
 use rand::prelude::*;
 
-use std::net::{SocketAddr, IpAddr};
 use std::convert::TryInto;
+use std::net::{IpAddr, SocketAddr};
 
 use crate::errors::RustyDHTError;
 
@@ -45,10 +45,10 @@ impl Id {
         bytes[0] = magic_prefix.prefix[0];
         bytes[1] = magic_prefix.prefix[1];
         bytes[2] = (magic_prefix.prefix[2] & 0xf8) | (rng.gen::<u8>() & 0x7);
-        for i in 3..ID_SIZE-1 {
+        for i in 3..ID_SIZE - 1 {
             bytes[i] = rng.gen();
         }
-        bytes[ID_SIZE-1] = r;
+        bytes[ID_SIZE - 1] = r;
 
         return Id { bytes: bytes };
     }
@@ -67,7 +67,7 @@ impl Id {
 
     pub fn is_valid_for_ip(&self, ip: &IpAddr) -> bool {
         // TODO return true if ip is not globally routable
-        let expected = IdPrefixMagic::from_ip(ip, self.bytes[ID_SIZE-1]);
+        let expected = IdPrefixMagic::from_ip(ip, self.bytes[ID_SIZE - 1]);
         let actual = IdPrefixMagic::from_id(&self);
 
         return expected == actual;
@@ -75,7 +75,7 @@ impl Id {
 
     // Returns the number of bits of prefix that the two ids have in common
     pub fn matching_prefix_bits(&self, other: &Self) -> usize {
-        let xored = self.clone() ^ other.clone();
+        let xored = self.xor(&other);
         let mut to_ret: usize = 0;
 
         for i in 0..ID_SIZE {
@@ -100,15 +100,11 @@ impl Id {
 
         Id::from_bytes(&bytes)
     }
-}
 
-impl std::ops::BitXor for Id {
-    type Output = Self;
-
-    fn bitxor(self, rhs: Self) -> Self::Output {
+    pub fn xor(&self, other: &Id) -> Id {
         let mut bytes: [u8; ID_SIZE] = [0; ID_SIZE];
         for i in 0..ID_SIZE {
-            bytes[i] = self.bytes[i] ^ rhs.bytes[i];
+            bytes[i] = self.bytes[i] ^ other.bytes[i];
         }
 
         Id::from_bytes(&bytes).expect("Wrong number of bytes for id")
@@ -129,7 +125,7 @@ impl PartialOrd for Id {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Node {
     pub id: Id,
     pub address: SocketAddr,
@@ -159,7 +155,7 @@ impl IdPrefixMagic {
             prefix: id.bytes[..3]
                 .try_into()
                 .expect("Failed to grab first three bytes of id"),
-            suffix: id.bytes[ID_SIZE-1],
+            suffix: id.bytes[ID_SIZE - 1],
         };
     }
 
@@ -264,22 +260,22 @@ mod tests {
     fn test_id_xor() {
         let h1 = Id::from_hex("0000000000000000000000000000000000000001").unwrap();
         let h2 = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
-        let h3 = h1 ^ h2;
+        let h3 = h1.xor(&h2);
         assert!(h3 == h1);
 
         let h1 = Id::from_hex("0000000000000000000000000000000000000001").unwrap();
         let h2 = Id::from_hex("0000000000000000000000000000000000000001").unwrap();
-        let h3 = h1 ^ h2;
+        let h3 = h1.xor(&h2);
         assert!(h3 == Id::from_hex("0000000000000000000000000000000000000000").unwrap());
 
         let h1 = Id::from_hex("1010101010101010101010101010101010101010").unwrap();
         let h2 = Id::from_hex("0101010101010101010101010101010101010101").unwrap();
-        let h3 = h1 ^ h2;
+        let h3 = h1.xor(&h2);
         assert!(h3 == Id::from_hex("1111111111111111111111111111111111111111").unwrap());
 
         let h1 = Id::from_hex("fefefefefefefefefefefefefefefefefefefefe").unwrap();
         let h2 = Id::from_hex("0505050505050505050505050505050505050505").unwrap();
-        let h3 = h1 ^ h2;
+        let h3 = h1.xor(&h2);
         assert!(h3 == Id::from_hex("fbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfb").unwrap());
     }
 
