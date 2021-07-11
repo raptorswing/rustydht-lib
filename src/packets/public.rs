@@ -399,6 +399,8 @@ impl Message {
     }
 }
 
+/// Returns true if the response and request types specified match.
+/// E.g., PingResponse goes with PingRequest. FindNodeResponse goes with FindNodeRequest.
 pub fn response_matches_request(res: &ResponseSpecific, req: &RequestSpecific) -> bool {
     match res {
         ResponseSpecific::PingResponse { .. } => {
@@ -759,5 +761,41 @@ mod tests {
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
         let parsed_msg = Message::from_serde_message(parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
+    }
+
+    #[test]
+    fn test_response_matches_request_find_node() {
+        let res = ResponseSpecific::FindNodeResponse(FindNodeResponseArguments {
+            nodes: vec!(),
+            responder_id: Id::from_random(&mut thread_rng())
+        });
+        let req = RequestSpecific::FindNodeRequest(FindNodeRequestArguments {
+            requester_id: Id::from_random(&mut thread_rng()),
+            target: Id::from_random(&mut thread_rng())
+        });
+        assert_eq!(true, response_matches_request(&res, &req));
+    }
+
+    #[test]
+    fn test_response_matches_request_find_ping() {
+        let res = ResponseSpecific::PingResponse(PingResponseArguments {
+            responder_id: Id::from_random(&mut thread_rng())
+        });
+        let req = RequestSpecific::PingRequest(PingRequestArguments {
+            requester_id: Id::from_random(&mut thread_rng()),
+        });
+        assert_eq!(true, response_matches_request(&res, &req));
+    }
+
+    #[test]
+    fn test_response_matches_request_find_nonmatching() {
+        let res = ResponseSpecific::PingResponse(PingResponseArguments {
+            responder_id: Id::from_random(&mut thread_rng())
+        });
+        let req = RequestSpecific::FindNodeRequest(FindNodeRequestArguments {
+            requester_id: Id::from_random(&mut thread_rng()),
+            target: Id::from_random(&mut thread_rng())
+        });
+        assert_eq!(false, response_matches_request(&res, &req));
     }
 }
