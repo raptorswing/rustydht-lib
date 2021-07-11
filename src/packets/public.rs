@@ -8,6 +8,8 @@ use anyhow::anyhow;
 use std::convert::TryInto;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use rand::prelude::*;
+
 const MAX_SCRAPE_INTERVAL: u64 = 21600; // 6 hours
 
 #[derive(Debug, PartialEq, Clone)]
@@ -394,6 +396,59 @@ impl Message {
 
     pub fn from_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<Message, errors::RustyDHTError> {
         Message::from_serde_message(internal::DHTMessage::from_bytes(bytes)?)
+    }
+}
+
+pub fn response_matches_request(res: &ResponseSpecific, req: &RequestSpecific) -> bool {
+    match res {
+        ResponseSpecific::PingResponse { .. } => {
+            if let RequestSpecific::PingRequest { .. } = req {
+                return true;
+            }
+        }
+
+        ResponseSpecific::FindNodeResponse { .. } => {
+            if let RequestSpecific::FindNodeRequest { .. } = req {
+                return true;
+            }
+        }
+
+        _ => {
+            eprintln!(
+                "Unimplemented response type {:?} in response_matches_request",
+                res
+            );
+        }
+    }
+    return false;
+}
+
+pub fn create_ping_request(requester_id: Id) -> Message {
+    let mut rng = thread_rng();
+    Message {
+        transaction_id: vec![rng.gen(), rng.gen()],
+        version: None,
+        requester_ip: None,
+        message_type: MessageType::Request(RequestSpecific::PingRequest(PingRequestArguments {
+            requester_id: requester_id,
+        })),
+    }
+}
+
+pub fn create_ping_response(
+    responder_id: Id,
+    transaction_id: Vec<u8>,
+    remote: SocketAddr,
+) -> Message {
+    Message {
+        transaction_id: transaction_id,
+        version: None,
+        requester_ip: Some(remote),
+        message_type: MessageType::Response(ResponseSpecific::PingResponse(
+            PingResponseArguments {
+                responder_id: responder_id,
+            },
+        )),
     }
 }
 

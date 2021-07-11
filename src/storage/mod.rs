@@ -1,3 +1,4 @@
 mod buckets;
 pub mod node_bucket_storage;
-mod node_wrapper;
+pub mod node_wrapper;
+pub mod outbound_request_storage;
