@@ -8,6 +8,8 @@ use anyhow::anyhow;
 use std::convert::TryInto;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use rand::prelude::*;
+
 const MAX_SCRAPE_INTERVAL: u64 = 21600; // 6 hours
 
 #[derive(Debug, PartialEq, Clone)]
@@ -397,6 +399,61 @@ impl Message {
     }
 }
 
+/// Returns true if the response and request types specified match.
+/// E.g., PingResponse goes with PingRequest. FindNodeResponse goes with FindNodeRequest.
+pub fn response_matches_request(res: &ResponseSpecific, req: &RequestSpecific) -> bool {
+    match res {
+        ResponseSpecific::PingResponse { .. } => {
+            if let RequestSpecific::PingRequest { .. } = req {
+                return true;
+            }
+        }
+
+        ResponseSpecific::FindNodeResponse { .. } => {
+            if let RequestSpecific::FindNodeRequest { .. } = req {
+                return true;
+            }
+        }
+
+        _ => {
+            eprintln!(
+                "Unimplemented response type {:?} in response_matches_request",
+                res
+            );
+        }
+    }
+    return false;
+}
+
+pub fn create_ping_request(requester_id: Id) -> Message {
+    let mut rng = thread_rng();
+    Message {
+        transaction_id: vec![rng.gen(), rng.gen()],
+        version: None,
+        requester_ip: None,
+        message_type: MessageType::Request(RequestSpecific::PingRequest(PingRequestArguments {
+            requester_id: requester_id,
+        })),
+    }
+}
+
+pub fn create_ping_response(
+    responder_id: Id,
+    transaction_id: Vec<u8>,
+    remote: SocketAddr,
+) -> Message {
+    Message {
+        transaction_id: transaction_id,
+        version: None,
+        requester_ip: Some(remote),
+        message_type: MessageType::Response(ResponseSpecific::PingResponse(
+            PingResponseArguments {
+                responder_id: responder_id,
+            },
+        )),
+    }
+}
+
 fn bytes_to_sockaddr<T: AsRef<[u8]>>(bytes: T) -> Result<SocketAddr, errors::RustyDHTError> {
     let bytes = bytes.as_ref();
     match bytes.len() {
@@ -704,5 +761,41 @@ mod tests {
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
         let parsed_msg = Message::from_serde_message(parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
+    }
+
+    #[test]
+    fn test_response_matches_request_find_node() {
+        let res = ResponseSpecific::FindNodeResponse(FindNodeResponseArguments {
+            nodes: vec!(),
+            responder_id: Id::from_random(&mut thread_rng())
+        });
+        let req = RequestSpecific::FindNodeRequest(FindNodeRequestArguments {
+            requester_id: Id::from_random(&mut thread_rng()),
+            target: Id::from_random(&mut thread_rng())
+        });
+        assert_eq!(true, response_matches_request(&res, &req));
+    }
+
+    #[test]
+    fn test_response_matches_request_find_ping() {
+        let res = ResponseSpecific::PingResponse(PingResponseArguments {
+            responder_id: Id::from_random(&mut thread_rng())
+        });
+        let req = RequestSpecific::PingRequest(PingRequestArguments {
+            requester_id: Id::from_random(&mut thread_rng()),
+        });
+        assert_eq!(true, response_matches_request(&res, &req));
+    }
+
+    #[test]
+    fn test_response_matches_request_find_nonmatching() {
+        let res = ResponseSpecific::PingResponse(PingResponseArguments {
+            responder_id: Id::from_random(&mut thread_rng())
+        });
+        let req = RequestSpecific::FindNodeRequest(FindNodeRequestArguments {
+            requester_id: Id::from_random(&mut thread_rng()),
+            target: Id::from_random(&mut thread_rng())
+        });
+        assert_eq!(false, response_matches_request(&res, &req));
     }
 }

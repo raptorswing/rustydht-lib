@@ -6,7 +6,7 @@ use crc::crc32;
 use rand::prelude::*;
 
 use std::convert::TryInto;
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 
 use crate::errors::RustyDHTError;
 
@@ -122,21 +122,6 @@ impl PartialOrd for Id {
         }
 
         Some(std::cmp::Ordering::Equal)
-    }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct Node {
-    pub id: Id,
-    pub address: SocketAddr,
-}
-
-impl Node {
-    pub fn new(id: Id, address: SocketAddr) -> Node {
-        Node {
-            id: id,
-            address: address,
-        }
     }
 }
 
