@@ -5,8 +5,8 @@ use crc::crc32;
 
 use rand::prelude::*;
 
-use std::net::{SocketAddr, IpAddr};
 use std::convert::TryInto;
+use std::net::{IpAddr, SocketAddr};
 
 use crate::errors::RustyDHTError;
 
@@ -45,10 +45,10 @@ impl Id {
         bytes[0] = magic_prefix.prefix[0];
         bytes[1] = magic_prefix.prefix[1];
         bytes[2] = (magic_prefix.prefix[2] & 0xf8) | (rng.gen::<u8>() & 0x7);
-        for i in 3..ID_SIZE-1 {
+        for i in 3..ID_SIZE - 1 {
             bytes[i] = rng.gen();
         }
-        bytes[ID_SIZE-1] = r;
+        bytes[ID_SIZE - 1] = r;
 
         return Id { bytes: bytes };
     }
@@ -67,7 +67,7 @@ impl Id {
 
     pub fn is_valid_for_ip(&self, ip: &IpAddr) -> bool {
         // TODO return true if ip is not globally routable
-        let expected = IdPrefixMagic::from_ip(ip, self.bytes[ID_SIZE-1]);
+        let expected = IdPrefixMagic::from_ip(ip, self.bytes[ID_SIZE - 1]);
         let actual = IdPrefixMagic::from_id(&self);
 
         return expected == actual;
@@ -129,7 +129,7 @@ impl PartialOrd for Id {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Node {
     pub id: Id,
     pub address: SocketAddr,
@@ -159,7 +159,7 @@ impl IdPrefixMagic {
             prefix: id.bytes[..3]
                 .try_into()
                 .expect("Failed to grab first three bytes of id"),
-            suffix: id.bytes[ID_SIZE-1],
+            suffix: id.bytes[ID_SIZE - 1],
         };
     }
 

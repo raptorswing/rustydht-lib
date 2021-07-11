@@ -1,5 +1,5 @@
-use crate::errors;
 use crate::common::{Id, Node, ID_SIZE};
+use crate::errors;
 
 use super::internal;
 
@@ -10,8 +10,22 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 const MAX_SCRAPE_INTERVAL: u64 = 21600; // 6 hours
 
-#[derive(Debug, PartialEq)]
-pub enum Message {
+#[derive(Debug, PartialEq, Clone)]
+pub struct Message {
+    pub transaction_id: Vec<u8>,
+
+    /// The version of the requester or responder.
+    pub version: Option<Vec<u8>>,
+
+    /// The IP address and port ("SocketAddr") of the requester as seen from the responder's point of view.
+    /// This should be set only on response, but is defined at this level with the other common fields to avoid defining yet another layer on the response objects.
+    pub requester_ip: Option<SocketAddr>,
+
+    pub message_type: MessageType,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum MessageType {
     Request(RequestSpecific),
 
     Response(ResponseSpecific),
@@ -19,7 +33,7 @@ pub enum Message {
     Error(ErrorSpecific),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum RequestSpecific {
     PingRequest(PingRequestArguments),
 
@@ -32,7 +46,7 @@ pub enum RequestSpecific {
     AnnouncePeerRequest(AnnouncePeerRequestArguments),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum ResponseSpecific {
     PingResponse(PingResponseArguments),
 
@@ -44,416 +58,302 @@ pub enum ResponseSpecific {
     // AnnouncePeerResponse not needed - same as PingResponse
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct PingRequestArguments {
     requester_id: Id,
-    transaction_id: Vec<u8>,
-    requester_version: Option<Vec<u8>>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct FindNodeRequestArguments {
     target: Id,
     requester_id: Id,
-    transaction_id: Vec<u8>,
-    requester_version: Option<Vec<u8>>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct GetPeersRequestArguments {
     info_hash: Id,
     requester_id: Id,
-    transaction_id: Vec<u8>,
-    requester_version: Option<Vec<u8>>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct SampleInfoHashesRequestArguments {
     target: Id,
     requester_id: Id,
-    transaction_id: Vec<u8>,
-    requester_version: Option<Vec<u8>>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct AnnouncePeerRequestArguments {
     requester_id: Id,
     info_hash: Id,
     port: u16,
     implied_port: Option<bool>,
     token: Vec<u8>,
-    transaction_id: Vec<u8>,
-    requester_version: Option<Vec<u8>>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum GetPeersResponseValues {
     Nodes(Vec<Node>),
     Peers(Vec<SocketAddr>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct PingResponseArguments {
     responder_id: Id,
-    transaction_id: Vec<u8>,
-    responder_version: Option<Vec<u8>>,
-    requester_ip: Option<SocketAddr>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct FindNodeResponseArguments {
     responder_id: Id,
-    transaction_id: Vec<u8>,
-    responder_version: Option<Vec<u8>>,
-    requester_ip: Option<SocketAddr>,
     nodes: Vec<Node>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct GetPeersResponseArguments {
     responder_id: Id,
-    transaction_id: Vec<u8>,
-    responder_version: Option<Vec<u8>>,
-    requester_ip: Option<SocketAddr>,
     token: Vec<u8>,
     values: GetPeersResponseValues,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct SampleInfoHashesResponseArguments {
     responder_id: Id,
-    transaction_id: Vec<u8>,
-    responder_version: Option<Vec<u8>>,
-    requester_ip: Option<SocketAddr>,
     interval: std::time::Duration,
     nodes: Vec<Node>,
     samples: Vec<Id>,
     num: i32,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum ErrorSpecific {}
 
 impl Message {
-    fn to_serde_message(&self) -> internal::DHTMessage {
-        match &self {
-            Message::Request(req) => match req {
-                RequestSpecific::PingRequest(arguments) => internal::DHTMessage {
-                    transaction_id: arguments.transaction_id.clone(),
-                    version: arguments.requester_version.clone(),
-                    ip: None,
-                    variant: internal::DHTMessageVariant::DHTRequest(
+    fn to_serde_message(self) -> internal::DHTMessage {
+        internal::DHTMessage {
+            transaction_id: self.transaction_id,
+            version: self.version,
+            ip: match self.requester_ip {
+                None => None,
+                Some(sockaddr) => Some(sockaddr_to_bytes(&sockaddr)),
+            },
+            variant: match self.message_type {
+                MessageType::Request(req) => internal::DHTMessageVariant::DHTRequest(match req {
+                    RequestSpecific::PingRequest(ping_args) => {
                         internal::DHTRequestSpecific::DHTPingRequest {
                             arguments: internal::DHTPingArguments {
-                                id: arguments.requester_id.to_vec(),
+                                id: ping_args.requester_id.to_vec(),
                             },
-                        },
-                    ),
-                },
+                        }
+                    }
 
-                RequestSpecific::FindNodeRequest(arguments) => internal::DHTMessage {
-                    transaction_id: arguments.transaction_id.clone(),
-                    version: arguments.requester_version.clone(),
-                    ip: None,
-                    variant: internal::DHTMessageVariant::DHTRequest(
+                    RequestSpecific::FindNodeRequest(find_node_args) => {
                         internal::DHTRequestSpecific::DHTFindNodeRequest {
                             arguments: internal::DHTFindNodeArguments {
-                                id: arguments.requester_id.to_vec(),
-                                target: arguments.target.to_vec(),
+                                id: find_node_args.requester_id.to_vec(),
+                                target: find_node_args.target.to_vec(),
                             },
-                        },
-                    ),
-                },
+                        }
+                    }
 
-                RequestSpecific::GetPeersRequest(arguments) => internal::DHTMessage {
-                    transaction_id: arguments.transaction_id.clone(),
-                    version: arguments.requester_version.clone(),
-                    ip: None,
-                    variant: internal::DHTMessageVariant::DHTRequest(
+                    RequestSpecific::GetPeersRequest(get_peers_args) => {
                         internal::DHTRequestSpecific::DHTGetPeersRequest {
                             arguments: internal::DHTGetPeersArguments {
-                                id: arguments.requester_id.to_vec(),
-                                info_hash: arguments.info_hash.to_vec(),
+                                id: get_peers_args.requester_id.to_vec(),
+                                info_hash: get_peers_args.info_hash.to_vec(),
                             },
-                        },
-                    ),
-                },
+                        }
+                    }
 
-                RequestSpecific::SampleInfoHashesRequest(arguments) => internal::DHTMessage {
-                    transaction_id: arguments.transaction_id.clone(),
-                    version: arguments.requester_version.clone(),
-                    ip: None,
-                    variant: internal::DHTMessageVariant::DHTRequest(
+                    RequestSpecific::SampleInfoHashesRequest(sample_info_hashes_args) => {
                         internal::DHTRequestSpecific::DHTSampleInfoHashesRequest {
                             arguments: internal::DHTSampleInfoHashesRequestArguments {
-                                id: arguments.requester_id.to_vec(),
-                                target: arguments.target.to_vec(),
+                                id: sample_info_hashes_args.requester_id.to_vec(),
+                                target: sample_info_hashes_args.target.to_vec(),
                             },
-                        },
-                    ),
-                },
+                        }
+                    }
 
-                RequestSpecific::AnnouncePeerRequest(arguments) => internal::DHTMessage {
-                    transaction_id: arguments.transaction_id.clone(),
-                    version: arguments.requester_version.clone(),
-                    ip: None,
-                    variant: internal::DHTMessageVariant::DHTRequest(
+                    RequestSpecific::AnnouncePeerRequest(announce_peer_args) => {
                         internal::DHTRequestSpecific::DHTAnnouncePeerRequest {
                             arguments: internal::DHTAnnouncePeerRequestArguments {
-                                id: arguments.requester_id.to_vec(),
-                                implied_port: if arguments.implied_port.is_none() {
+                                id: announce_peer_args.requester_id.to_vec(),
+                                implied_port: if announce_peer_args.implied_port.is_none() {
                                     None
-                                } else if arguments.implied_port.unwrap() {
+                                } else if announce_peer_args.implied_port.unwrap() {
                                     Some(1)
                                 } else {
                                     Some(0)
                                 },
-                                info_hash: arguments.info_hash.to_vec(),
-                                port: arguments.port,
-                                token: arguments.token.clone(),
+                                info_hash: announce_peer_args.info_hash.to_vec(),
+                                port: announce_peer_args.port,
+                                token: announce_peer_args.token,
                             },
-                        },
-                    ),
-                },
-            },
+                        }
+                    }
+                }),
 
-            Message::Response(res) => match res {
-                ResponseSpecific::FindNodeResponse(arguments) => internal::DHTMessage {
-                    transaction_id: arguments.transaction_id.clone(),
-                    version: arguments.responder_version.clone(),
-                    ip: match arguments.requester_ip {
-                        None => None,
-                        Some(sockaddr) => Some(sockaddr_to_bytes(&sockaddr)),
-                    },
-                    variant: internal::DHTMessageVariant::DHTResponse(
+                MessageType::Response(res) => internal::DHTMessageVariant::DHTResponse(match res {
+                    ResponseSpecific::FindNodeResponse(find_node_args) => {
                         internal::DHTResponseSpecific::DHTFindNodeResponse {
                             arguments: internal::DHTFindNodeResponseArguments {
-                                id: arguments.responder_id.to_vec(),
-                                nodes: nodes4_to_bytes(&arguments.nodes),
+                                id: find_node_args.responder_id.to_vec(),
+                                nodes: nodes4_to_bytes(&find_node_args.nodes),
                             },
-                        },
-                    ),
-                },
+                        }
+                    }
 
-                ResponseSpecific::GetPeersResponse(arguments) => internal::DHTMessage {
-                    transaction_id: arguments.transaction_id.clone(),
-                    version: arguments.responder_version.clone(),
-                    ip: match arguments.requester_ip {
-                        None => None,
-                        Some(sockaddr) => Some(sockaddr_to_bytes(&sockaddr)),
-                    },
-                    variant: internal::DHTMessageVariant::DHTResponse(
+                    ResponseSpecific::GetPeersResponse(get_peers_args) => {
                         internal::DHTResponseSpecific::DHTGetPeersResponse {
                             arguments: internal::DHTGetPeersResponseArguments {
-                                id: arguments.responder_id.to_vec(),
-                                token: arguments.token.clone(),
-                                nodes: match &arguments.values {
+                                id: get_peers_args.responder_id.to_vec(),
+                                token: get_peers_args.token.clone(),
+                                nodes: match &get_peers_args.values {
                                     GetPeersResponseValues::Nodes(nodes) => {
                                         Some(nodes4_to_bytes(&nodes))
                                     }
                                     _ => None,
                                 },
-                                values: match &arguments.values {
+                                values: match &get_peers_args.values {
                                     GetPeersResponseValues::Peers(peers) => {
                                         Some(peers_to_bytes(peers))
                                     }
                                     _ => None,
                                 },
                             },
-                        },
-                    ),
-                },
+                        }
+                    }
 
-                ResponseSpecific::PingResponse(arguments) => internal::DHTMessage {
-                    transaction_id: arguments.transaction_id.clone(),
-                    version: arguments.responder_version.clone(),
-                    ip: match arguments.requester_ip {
-                        None => None,
-                        Some(sockaddr) => Some(sockaddr_to_bytes(&sockaddr)),
-                    },
-                    variant: internal::DHTMessageVariant::DHTResponse(
+                    ResponseSpecific::PingResponse(ping_args) => {
                         internal::DHTResponseSpecific::DHTPingResponse {
                             arguments: internal::DHTPingResponseArguments {
-                                id: arguments.responder_id.to_vec(),
+                                id: ping_args.responder_id.to_vec(),
                             },
-                        },
-                    ),
-                },
+                        }
+                    }
 
-                ResponseSpecific::SampleInfoHashesResponse(arguments) => internal::DHTMessage {
-                    transaction_id: arguments.transaction_id.clone(),
-                    version: arguments.responder_version.clone(),
-                    ip: match arguments.requester_ip {
-                        None => None,
-                        Some(sockaddr) => Some(sockaddr_to_bytes(&sockaddr)),
-                    },
-                    variant: internal::DHTMessageVariant::DHTResponse(
+                    ResponseSpecific::SampleInfoHashesResponse(sample_info_hashes_args) => {
                         internal::DHTResponseSpecific::DHTSampleInfoHashesResponse {
                             arguments: internal::DHTSampleInfoHashesResponseArguments {
-                                id: arguments.responder_id.to_vec(),
+                                id: sample_info_hashes_args.responder_id.to_vec(),
                                 interval: std::cmp::min(
                                     MAX_SCRAPE_INTERVAL,
-                                    arguments.interval.as_secs(),
+                                    sample_info_hashes_args.interval.as_secs(),
                                 ) as i32,
-                                num: arguments.num,
-                                nodes: nodes4_to_bytes(&arguments.nodes),
+                                num: sample_info_hashes_args.num,
+                                nodes: nodes4_to_bytes(&sample_info_hashes_args.nodes),
                                 samples: {
-                                    let mut a =
-                                        Vec::with_capacity(arguments.samples.len() * ID_SIZE);
-                                    for info_hash in &arguments.samples {
+                                    let mut a = Vec::with_capacity(
+                                        sample_info_hashes_args.samples.len() * ID_SIZE,
+                                    );
+                                    for info_hash in &sample_info_hashes_args.samples {
                                         a.append(&mut info_hash.to_vec());
                                     }
                                     a
                                 },
                             },
-                        },
-                    ),
-                }
+                        }
+                    }
+                }),
+
+                MessageType::Error(_) => panic!("Not implemented"),
             },
-
-            // Message::Error(err) => {
-
-            // }
-            _ => {
-                panic!("Message type not implemented!");
-            }
         }
     }
 
-    fn from_serde_message(
-        msg: &internal::DHTMessage,
-    ) -> Result<Message, errors::RustyDHTError> {
-        match &msg.variant {
-            internal::DHTMessageVariant::DHTRequest(request_variant) => match request_variant {
-                internal::DHTRequestSpecific::DHTPingRequest { arguments } => Ok(Message::Request(
-                    RequestSpecific::PingRequest(PingRequestArguments {
-                        transaction_id: msg.transaction_id.clone(),
-                        requester_version: msg.version.clone(),
-                        requester_id: Id::from_bytes(&arguments.id)?,
-                    }),
-                )),
-
-                internal::DHTRequestSpecific::DHTAnnouncePeerRequest { arguments } => {
-                    Ok(Message::Request(RequestSpecific::AnnouncePeerRequest(
-                        AnnouncePeerRequestArguments {
-                            transaction_id: msg.transaction_id.clone(),
-                            requester_version: msg.version.clone(),
-                            requester_id: Id::from_bytes(&arguments.id)?,
-                            implied_port: if arguments.implied_port.is_none() {
-                                None
-                            } else if arguments.implied_port.unwrap() != 0 {
-                                Some(true)
-                            } else {
-                                Some(false)
-                            },
-                            info_hash: Id::from_bytes(&arguments.info_hash)?,
-                            port: arguments.port,
-                            token: arguments.token.clone(),
-                        },
-                    )))
-                }
-
-                internal::DHTRequestSpecific::DHTFindNodeRequest { arguments } => Ok(
-                    Message::Request(RequestSpecific::FindNodeRequest(FindNodeRequestArguments {
-                        transaction_id: msg.transaction_id.clone(),
-                        requester_version: msg.version.clone(),
-                        requester_id: Id::from_bytes(&arguments.id)?,
-                        target: Id::from_bytes(&arguments.target)?,
-                    })),
-                ),
-
-                internal::DHTRequestSpecific::DHTGetPeersRequest { arguments } => Ok(
-                    Message::Request(RequestSpecific::GetPeersRequest(GetPeersRequestArguments {
-                        transaction_id: msg.transaction_id.clone(),
-                        requester_version: msg.version.clone(),
-                        requester_id: Id::from_bytes(&arguments.id)?,
-                        info_hash: Id::from_bytes(&arguments.info_hash)?,
-                    })),
-                ),
-
-                internal::DHTRequestSpecific::DHTSampleInfoHashesRequest { arguments } => {
-                    Ok(Message::Request(RequestSpecific::SampleInfoHashesRequest(
-                        SampleInfoHashesRequestArguments {
-                            transaction_id: msg.transaction_id.clone(),
-                            requester_version: msg.version.clone(),
-                            requester_id: Id::from_bytes(&arguments.id)?,
-                            target: Id::from_bytes(&arguments.target)?,
-                        },
-                    )))
-                }
+    fn from_serde_message(msg: internal::DHTMessage) -> Result<Message, errors::RustyDHTError> {
+        Ok(Message {
+            transaction_id: msg.transaction_id,
+            version: msg.version,
+            requester_ip: match msg.ip {
+                Some(ip) => Some(bytes_to_sockaddr(ip)?),
+                _ => None,
             },
 
-            internal::DHTMessageVariant::DHTResponse(response_variant) => match response_variant {
-                internal::DHTResponseSpecific::DHTFindNodeResponse { arguments } => {
-                    Ok(Message::Response(ResponseSpecific::FindNodeResponse(
-                        FindNodeResponseArguments {
-                            transaction_id: msg.transaction_id.clone(),
-                            responder_id: Id::from_bytes(&arguments.id)?,
-                            responder_version: msg.version.clone(),
-                            requester_ip: if msg.ip.is_none() {
-                                None
-                            } else {
-                                Some(bytes_to_sockaddr(&msg.ip.as_ref().unwrap())?)
-                            },
-                            nodes: bytes_to_nodes4(&arguments.nodes)?,
-                        },
-                    )))
-                }
-
-                internal::DHTResponseSpecific::DHTGetPeersResponse { arguments } => {
-                    if arguments.values.is_none() && arguments.nodes.is_none() {
-                        return Err(anyhow!("Either values or nodes must be Some").into());
-                    }
-
-                    Ok(Message::Response(ResponseSpecific::GetPeersResponse(
-                        GetPeersResponseArguments {
-                            transaction_id: msg.transaction_id.clone(),
-                            responder_id: Id::from_bytes(&arguments.id)?,
-                            responder_version: msg.version.clone(),
-                            requester_ip: match &msg.ip {
-                                Some(ip) => Some(bytes_to_sockaddr(ip)?),
-                                _ => None,
-                            },
-                            token: arguments.token.clone(),
-                            values: if arguments.values.is_some() {
-                                GetPeersResponseValues::Peers(bytes_to_peers(
-                                    &arguments.values.as_ref().unwrap(),
-                                )?)
-                            } else {
-                                GetPeersResponseValues::Nodes(bytes_to_nodes4(
-                                    &arguments.nodes.as_ref().unwrap(),
-                                )?)
-                            },
-                        },
-                    )))
-                }
-
-                internal::DHTResponseSpecific::DHTPingResponse { arguments } => Ok(
-                    Message::Response(ResponseSpecific::PingResponse(PingResponseArguments {
-                        transaction_id: msg.transaction_id.clone(),
-                        responder_id: Id::from_bytes(&arguments.id)?,
-                        responder_version: msg.version.clone(),
-                        requester_ip: match &msg.ip {
-                            Some(ip) => Some(bytes_to_sockaddr(ip)?),
-                            _ => None,
-                        },
-                    })),
-                ),
-
-                internal::DHTResponseSpecific::DHTSampleInfoHashesResponse { arguments } => {
-                    if arguments.interval < 0 || arguments.interval > MAX_SCRAPE_INTERVAL as i32 {
-                        return Err(anyhow!("interval is out of range. Received {} but should be 0 <= interval <= {}", arguments.interval, MAX_SCRAPE_INTERVAL).into());
-                    }
-                    Ok(Message::Response(
-                        ResponseSpecific::SampleInfoHashesResponse(
-                            SampleInfoHashesResponseArguments {
-                                transaction_id: msg.transaction_id.clone(),
-                                responder_id: Id::from_bytes(&arguments.id)?,
-                                responder_version: msg.version.clone(),
-                                requester_ip: match &msg.ip {
-                                    Some(ip) => Some(bytes_to_sockaddr(ip)?),
-                                    _ => None,
+            message_type: match msg.variant {
+                internal::DHTMessageVariant::DHTRequest(req_variant) => {
+                    MessageType::Request(match req_variant {
+                        internal::DHTRequestSpecific::DHTAnnouncePeerRequest { arguments } => {
+                            RequestSpecific::AnnouncePeerRequest(AnnouncePeerRequestArguments {
+                                requester_id: Id::from_bytes(arguments.id)?,
+                                implied_port: if arguments.implied_port.is_none() {
+                                    None
+                                } else if arguments.implied_port.unwrap() != 0 {
+                                    Some(true)
+                                } else {
+                                    Some(false)
                                 },
+                                info_hash: Id::from_bytes(&arguments.info_hash)?,
+                                port: arguments.port,
+                                token: arguments.token.clone(),
+                            })
+                        }
+
+                        internal::DHTRequestSpecific::DHTFindNodeRequest { arguments } => {
+                            RequestSpecific::FindNodeRequest(FindNodeRequestArguments {
+                                requester_id: Id::from_bytes(arguments.id)?,
+                                target: Id::from_bytes(&arguments.target)?,
+                            })
+                        }
+
+                        internal::DHTRequestSpecific::DHTGetPeersRequest { arguments } => {
+                            RequestSpecific::GetPeersRequest(GetPeersRequestArguments {
+                                requester_id: Id::from_bytes(arguments.id)?,
+                                info_hash: Id::from_bytes(&arguments.info_hash)?,
+                            })
+                        }
+
+                        internal::DHTRequestSpecific::DHTPingRequest { arguments } => {
+                            RequestSpecific::PingRequest(PingRequestArguments {
+                                requester_id: Id::from_bytes(&arguments.id)?,
+                            })
+                        }
+
+                        internal::DHTRequestSpecific::DHTSampleInfoHashesRequest { arguments } => {
+                            RequestSpecific::SampleInfoHashesRequest(
+                                SampleInfoHashesRequestArguments {
+                                    requester_id: Id::from_bytes(&arguments.id)?,
+                                    target: Id::from_bytes(&arguments.target)?,
+                                },
+                            )
+                        }
+                    })
+                }
+
+                internal::DHTMessageVariant::DHTResponse(res_variant) => {
+                    MessageType::Response(match res_variant {
+                        internal::DHTResponseSpecific::DHTFindNodeResponse { arguments } => {
+                            ResponseSpecific::FindNodeResponse(FindNodeResponseArguments {
+                                responder_id: Id::from_bytes(&arguments.id)?,
+                                nodes: bytes_to_nodes4(&arguments.nodes)?,
+                            })
+                        }
+
+                        internal::DHTResponseSpecific::DHTGetPeersResponse { arguments } => {
+                            ResponseSpecific::GetPeersResponse(GetPeersResponseArguments {
+                                responder_id: Id::from_bytes(&arguments.id)?,
+                                token: arguments.token.clone(),
+                                values: if arguments.values.is_some() {
+                                    GetPeersResponseValues::Peers(bytes_to_peers(
+                                        &arguments.values.as_ref().unwrap(),
+                                    )?)
+                                } else {
+                                    GetPeersResponseValues::Nodes(bytes_to_nodes4(
+                                        &arguments.nodes.as_ref().unwrap(),
+                                    )?)
+                                },
+                            })
+                        }
+
+                        internal::DHTResponseSpecific::DHTPingResponse { arguments } => {
+                            ResponseSpecific::PingResponse(PingResponseArguments {
+                                responder_id: Id::from_bytes(&arguments.id)?,
+                            })
+                        }
+
+                        internal::DHTResponseSpecific::DHTSampleInfoHashesResponse {
+                            arguments,
+                        } => ResponseSpecific::SampleInfoHashesResponse(
+                            SampleInfoHashesResponseArguments {
+                                responder_id: Id::from_bytes(&arguments.id)?,
                                 interval: std::time::Duration::from_secs(arguments.interval as u64),
                                 num: arguments.num,
                                 nodes: bytes_to_nodes4(&arguments.nodes)?,
@@ -463,14 +363,16 @@ impl Message {
                                             "Wrong sample length {} not a multiple of {}",
                                             arguments.samples.len(),
                                             ID_SIZE
-                                        ).into());
+                                        )
+                                        .into());
                                     }
                                     let num_expected = arguments.samples.len() / ID_SIZE;
                                     let mut to_ret = Vec::with_capacity(num_expected);
 
                                     for i in 0..num_expected {
                                         let i = i * ID_SIZE;
-                                        let id = Id::from_bytes(&arguments.samples[i..i+ID_SIZE])?;
+                                        let id =
+                                            Id::from_bytes(&arguments.samples[i..i + ID_SIZE])?;
                                         to_ret.push(id);
                                     }
 
@@ -478,22 +380,20 @@ impl Message {
                                 },
                             },
                         ),
-                    ))
+                    })
                 }
-            },
 
-            _ => {
-                panic!("Not implemented");
-            }
-        }
+                internal::DHTMessageVariant::DHTError(_) => panic!("Not implemented"),
+            },
+        })
     }
 
-    pub fn to_bytes(&self) -> Result<Vec<u8>, errors::RustyDHTError> {
+    pub fn to_bytes(self) -> Result<Vec<u8>, errors::RustyDHTError> {
         self.to_serde_message().to_bytes()
     }
 
     pub fn from_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<Message, errors::RustyDHTError> {
-        Message::from_serde_message(&internal::DHTMessage::from_bytes(bytes)?)
+        Message::from_serde_message(internal::DHTMessage::from_bytes(bytes)?)
     }
 }
 
@@ -551,9 +451,7 @@ fn sockaddr_to_bytes(sockaddr: &SocketAddr) -> Vec<u8> {
     return to_ret;
 }
 
-fn bytes_to_nodes4<T: AsRef<[u8]>>(
-    bytes: T,
-) -> Result<Vec<Node>, errors::RustyDHTError> {
+fn bytes_to_nodes4<T: AsRef<[u8]>>(bytes: T) -> Result<Vec<Node>, errors::RustyDHTError> {
     let bytes = bytes.as_ref();
     let node4_byte_size: usize = ID_SIZE + 6;
     if bytes.len() % node4_byte_size != 0 {
@@ -604,179 +502,207 @@ mod tests {
 
     #[test]
     fn test_ping_request() {
-        let original_msg = Message::Request(RequestSpecific::PingRequest(PingRequestArguments {
-            requester_id: Id::from_hex("f00ff00ff00ff00ff00ff00ff00ff00ff00ff00f").unwrap(),
-            requester_version: None,
+        let original_msg = Message {
             transaction_id: vec![0, 1, 2],
-        }));
+            version: None,
+            requester_ip: None,
+            message_type: MessageType::Request(RequestSpecific::PingRequest(
+                PingRequestArguments {
+                    requester_id: Id::from_hex("f00ff00ff00ff00ff00ff00ff00ff00ff00ff00f").unwrap(),
+                },
+            )),
+        };
 
-        let serde_msg = original_msg.to_serde_message();
+        let serde_msg = original_msg.clone().to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 
     #[test]
     fn test_ping_response() {
-        let original_msg =
-            Message::Response(ResponseSpecific::PingResponse(PingResponseArguments {
-                responder_id: Id::from_hex("beefbeefbeefbeefbeefbeefbeefbeefbeefbeef").unwrap(),
-                transaction_id: vec![1, 2, 3],
-                responder_version: Some(vec![0xde, 0xad]),
-                requester_ip: Some("99.100.101.102:1030".parse().unwrap()),
-            }));
+        let original_msg = Message {
+            transaction_id: vec![1, 2, 3],
+            version: Some(vec![0xde, 0xad]),
+            requester_ip: Some("99.100.101.102:1030".parse().unwrap()),
+            message_type: MessageType::Response(ResponseSpecific::PingResponse(
+                PingResponseArguments {
+                    responder_id: Id::from_hex("beefbeefbeefbeefbeefbeefbeefbeefbeefbeef").unwrap(),
+                },
+            )),
+        };
 
-        let serde_msg = original_msg.to_serde_message();
+        let serde_msg = original_msg.clone().to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 
     #[test]
     fn test_get_peers_request() {
-        let original_msg =
-            Message::Request(RequestSpecific::GetPeersRequest(GetPeersRequestArguments {
-                info_hash: Id::from_hex("deaddeaddeaddeaddeaddeaddeaddeaddeaddead").unwrap(),
-                requester_id: Id::from_hex("beefbeefbeefbeefbeefbeefbeefbeefbeefbeef").unwrap(),
-                transaction_id: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-                requester_version: Some(vec![72, 73]),
-            }));
+        let original_msg = Message {
+            transaction_id: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            version: Some(vec![72, 73]),
+            requester_ip: None,
+            message_type: MessageType::Request(RequestSpecific::GetPeersRequest(
+                GetPeersRequestArguments {
+                    info_hash: Id::from_hex("deaddeaddeaddeaddeaddeaddeaddeaddeaddead").unwrap(),
+                    requester_id: Id::from_hex("beefbeefbeefbeefbeefbeefbeefbeefbeefbeef").unwrap(),
+                },
+            )),
+        };
 
-        let serde_msg = original_msg.to_serde_message();
+        let serde_msg = original_msg.clone().to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 
     #[test]
     fn test_get_peers_response() {
-        let original_msg = Message::Response(ResponseSpecific::GetPeersResponse(
-            GetPeersResponseArguments {
-                responder_id: Id::from_hex("0505050505050505050505050505050505050505").unwrap(),
-                transaction_id: vec![1, 2, 3],
-                responder_version: Some(vec![1]),
-                requester_ip: Some("50.51.52.53:5455".parse().unwrap()),
-                token: vec![99, 100, 101, 102],
-                values: GetPeersResponseValues::Nodes(vec![Node::new(
-                    Id::from_hex("0606060606060606060606060606060606060606").unwrap(),
-                    "49.50.52.52:5354".parse().unwrap(),
-                )]),
-            },
-        ));
+        let original_msg = Message {
+            transaction_id: vec![1, 2, 3],
+            version: Some(vec![1]),
+            requester_ip: Some("50.51.52.53:5455".parse().unwrap()),
+            message_type: MessageType::Response(ResponseSpecific::GetPeersResponse(
+                GetPeersResponseArguments {
+                    responder_id: Id::from_hex("0505050505050505050505050505050505050505").unwrap(),
+                    token: vec![99, 100, 101, 102],
+                    values: GetPeersResponseValues::Nodes(vec![Node::new(
+                        Id::from_hex("0606060606060606060606060606060606060606").unwrap(),
+                        "49.50.52.52:5354".parse().unwrap(),
+                    )]),
+                },
+            )),
+        };
 
-        let serde_msg = original_msg.to_serde_message();
+        let serde_msg = original_msg.clone().to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 
     #[test]
     fn test_find_node_request() {
-        let original_msg =
-            Message::Request(RequestSpecific::FindNodeRequest(FindNodeRequestArguments {
-                target: Id::from_hex("1234123412341234123412341234123412341234").unwrap(),
-                requester_id: Id::from_hex("5678567856785678567856785678567856785678").unwrap(),
-                transaction_id: vec![1, 2, 3],
-                requester_version: Some(vec![0x62, 0x61, 0x72, 0x66]),
-            }));
+        let original_msg = Message {
+            transaction_id: vec![1, 2, 3],
+            version: Some(vec![0x62, 0x61, 0x72, 0x66]),
+            requester_ip: None,
+            message_type: MessageType::Request(RequestSpecific::FindNodeRequest(
+                FindNodeRequestArguments {
+                    target: Id::from_hex("1234123412341234123412341234123412341234").unwrap(),
+                    requester_id: Id::from_hex("5678567856785678567856785678567856785678").unwrap(),
+                },
+            )),
+        };
 
-        let serde_msg = original_msg.to_serde_message();
+        let serde_msg = original_msg.clone().to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 
     #[test]
     fn test_find_node_response() {
-        let original_msg = Message::Response(ResponseSpecific::FindNodeResponse(
-            FindNodeResponseArguments {
-                responder_id: Id::from_hex("0505050505050505050505050505050505050505").unwrap(),
-                transaction_id: vec![1, 2, 3],
-                responder_version: Some(vec![1]),
-                requester_ip: Some("50.51.52.53:5455".parse().unwrap()),
-                nodes: vec![Node::new(
-                    Id::from_hex("0606060606060606060606060606060606060606").unwrap(),
-                    "49.50.52.52:5354".parse().unwrap(),
-                )],
-            },
-        ));
+        let original_msg = Message {
+            transaction_id: vec![1, 2, 3],
+            version: Some(vec![1]),
+            requester_ip: Some("50.51.52.53:5455".parse().unwrap()),
+            message_type: MessageType::Response(ResponseSpecific::FindNodeResponse(
+                FindNodeResponseArguments {
+                    responder_id: Id::from_hex("0505050505050505050505050505050505050505").unwrap(),
+                    nodes: vec![Node::new(
+                        Id::from_hex("0606060606060606060606060606060606060606").unwrap(),
+                        "49.50.52.52:5354".parse().unwrap(),
+                    )],
+                },
+            )),
+        };
 
-        let serde_msg = original_msg.to_serde_message();
+        let serde_msg = original_msg.clone().to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 
     #[test]
     fn test_announce_peer_request() {
-        let original_msg = Message::Request(RequestSpecific::AnnouncePeerRequest(
-            AnnouncePeerRequestArguments {
-                requester_id: Id::from_hex("5678567856785678567856785678567856785678").unwrap(),
-                transaction_id: vec![1, 2, 3],
-                requester_version: Some(vec![0x62, 0x61, 0x72, 0x66]),
-                port: 666,
-                implied_port: Some(false),
-                token: vec![42, 42, 42, 42],
-                info_hash: Id::from_hex("9899989998999899989998999899989998999899").unwrap(),
-            },
-        ));
+        let original_msg = Message {
+            transaction_id: vec![1, 2, 3],
+            version: Some(vec![0x62, 0x61, 0x72, 0x66]),
+            requester_ip: None,
+            message_type: MessageType::Request(RequestSpecific::AnnouncePeerRequest(
+                AnnouncePeerRequestArguments {
+                    requester_id: Id::from_hex("5678567856785678567856785678567856785678").unwrap(),
+                    port: 666,
+                    implied_port: Some(false),
+                    token: vec![42, 42, 42, 42],
+                    info_hash: Id::from_hex("9899989998999899989998999899989998999899").unwrap(),
+                },
+            )),
+        };
 
-        let serde_msg = original_msg.to_serde_message();
+        let serde_msg = original_msg.clone().to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 
     #[test]
     fn test_sample_info_hashes_request() {
-        let original_msg = Message::Request(RequestSpecific::SampleInfoHashesRequest(
-            SampleInfoHashesRequestArguments {
-                requester_id: Id::from_hex("5678567856785678567856785678567856785678").unwrap(),
-                transaction_id: vec![1, 2, 3],
-                requester_version: Some(vec![0x62, 0x61, 0x72, 0x66]),
-                target: Id::from_hex("3344334433443344334433443344334433443344").unwrap(),
-            },
-        ));
+        let original_msg = Message {
+            transaction_id: vec![1, 2, 3],
+            version: Some(vec![0x62, 0x61, 0x72, 0x66]),
+            requester_ip: None,
+            message_type: MessageType::Request(RequestSpecific::SampleInfoHashesRequest(
+                SampleInfoHashesRequestArguments {
+                    requester_id: Id::from_hex("5678567856785678567856785678567856785678").unwrap(),
+                    target: Id::from_hex("3344334433443344334433443344334433443344").unwrap(),
+                },
+            )),
+        };
 
-        let serde_msg = original_msg.to_serde_message();
+        let serde_msg = original_msg.clone().to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 
     #[test]
     fn test_sample_info_hashes_response() {
-        let original_msg = Message::Response(ResponseSpecific::SampleInfoHashesResponse(
-            SampleInfoHashesResponseArguments {
-                responder_id: Id::from_hex("0505050505050505050505050505050505050505").unwrap(),
-                transaction_id: vec![1, 2, 3],
-                responder_version: Some(vec![1]),
-                requester_ip: Some("50.51.52.53:5455".parse().unwrap()),
-                interval: std::time::Duration::from_secs(32),
-                nodes: vec![Node::new(
-                    Id::from_hex("0606060606060606060606060606060606060606").unwrap(),
-                    "49.50.52.52:5354".parse().unwrap(),
-                )],
-                samples: vec![
-                    Id::from_hex("3232323232323232323232323232323232323232").unwrap(),
-                    Id::from_hex("3434343434343434343434343434343434343434").unwrap(),
-                ],
-                num: 300,
-            },
-        ));
+        let original_msg = Message {
+            transaction_id: vec![1, 2, 3],
+            version: Some(vec![1]),
+            requester_ip: Some("50.51.52.53:5455".parse().unwrap()),
+            message_type: MessageType::Response(ResponseSpecific::SampleInfoHashesResponse(
+                SampleInfoHashesResponseArguments {
+                    responder_id: Id::from_hex("0505050505050505050505050505050505050505").unwrap(),
+                    interval: std::time::Duration::from_secs(32),
+                    nodes: vec![Node::new(
+                        Id::from_hex("0606060606060606060606060606060606060606").unwrap(),
+                        "49.50.52.52:5354".parse().unwrap(),
+                    )],
+                    samples: vec![
+                        Id::from_hex("3232323232323232323232323232323232323232").unwrap(),
+                        Id::from_hex("3434343434343434343434343434343434343434").unwrap(),
+                    ],
+                    num: 300,
+                },
+            )),
+        };
 
-        let serde_msg = original_msg.to_serde_message();
+        let serde_msg = original_msg.clone().to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
-        let parsed_msg = Message::from_serde_message(&parsed_serde_msg).unwrap();
+        let parsed_msg = Message::from_serde_message(parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
     }
 }
