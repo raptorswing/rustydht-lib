@@ -12,7 +12,7 @@ use crate::errors::RustyDHTError;
 
 pub const ID_SIZE: usize = 20;
 
-#[derive(Debug, PartialEq, Copy, Clone)]
+#[derive(Eq, PartialEq, Copy, Clone)]
 pub struct Id {
     bytes: [u8; ID_SIZE],
 }
@@ -108,6 +108,24 @@ impl Id {
         }
 
         Id::from_bytes(&bytes).expect("Wrong number of bytes for id")
+    }
+}
+
+impl std::fmt::Display for Id {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&hex::encode(&self.bytes))
+    }
+}
+
+impl std::fmt::Debug for Id {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&hex::encode(&self.bytes))
+    }
+}
+
+impl std::hash::Hash for Id {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.bytes.hash(state);
     }
 }
 
