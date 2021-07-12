@@ -2,8 +2,8 @@ use std::time::Instant;
 
 use crate::common::{Id, Node};
 
-use super::node_wrapper::NodeWrapper;
 use super::buckets::Buckets;
+use super::node_wrapper::NodeWrapper;
 
 pub trait NodeStorage {
     fn new(our_id: Id, k: usize) -> Self;
@@ -168,23 +168,67 @@ impl NodeStorage for NodeBucketStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{SocketAddr, IpAddr, Ipv4Addr};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    #[test]
+    fn test_add_unverified_and_verified() {
+        for verified in [false, true] {
+            let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
+            let mut storage = NodeBucketStorage::new(our_id, 8);
+
+            let node1 = Node::new(
+                Id::from_hex("1234567812345678123456781234567812345678").unwrap(),
+                "1.2.3.4:1234".parse().unwrap()
+            );
+            let node2 = Node::new(
+                Id::from_hex("5234567812345678123456781234567812345678").unwrap(),
+                "5.2.3.4:1234".parse().unwrap()
+            );
+
+            storage.add_or_update(node1.clone(), verified);
+            storage.add_or_update(node2.clone(), verified);
+
+            let (populated_one, empty_one) = match verified {
+                true => {
+                    (storage.get_all_verified(), storage.get_all_unverified())
+                },
+
+                false => {
+                    (storage.get_all_unverified(), storage.get_all_verified())
+                }
+            };
+            assert_eq!(2, populated_one.len());
+            assert_eq!(0, empty_one.len());
+
+            let node1_wrapper = populated_one.iter().find(|nw| nw.node == node1).unwrap();
+            let node2_wrapper = populated_one.iter().find(|nw| nw.node == node1).unwrap();
+
+            assert_eq!(verified, node1_wrapper.last_verified.is_some());
+            assert_eq!(verified, node2_wrapper.last_verified.is_some());
+        }
+    }
 
     #[test]
     fn test_get_nearest_nodes() {
         let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
         let mut storage = NodeBucketStorage::new(our_id, 1);
 
-        storage.add_or_update_verified(Node::new(
-            Id::from_hex("7fffffffffffffffffffffffffffffffffffffff").unwrap(),
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
-        ));
+        storage.add_or_update(
+            Node::new(
+                Id::from_hex("7fffffffffffffffffffffffffffffffffffffff").unwrap(),
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
+            ),
+            true,
+        );
 
         let closer_id = Id::from_hex("ffffffffffffffffffffffffffffffffffffffff").unwrap();
-        storage.add_or_update_verified(Node::new(
-            closer_id,
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
-        ));
+        storage.add_or_update(
+            Node::new(
+                closer_id,
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
+            ),
+            true,
+        );
 
         let seeking_id = Id::from_hex("8000000000000000000000000000000000000000").unwrap();
 
