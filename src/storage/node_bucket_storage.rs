@@ -2,8 +2,8 @@ use std::time::Instant;
 
 use crate::common::{Id, Node};
 
-use super::node_wrapper::NodeWrapper;
 use super::buckets::Buckets;
+use super::node_wrapper::NodeWrapper;
 
 pub trait NodeStorage {
     fn new(our_id: Id, k: usize) -> Self;
@@ -12,8 +12,7 @@ pub trait NodeStorage {
     fn clear(&mut self);
 
     fn count_buckets(&self) -> usize;
-    fn count_unverified(&self) -> usize;
-    fn count_verified(&self) -> usize;
+    fn count(&self) -> (usize, usize);
 
     fn get_all_unverified(&self) -> Vec<&NodeWrapper>;
     fn get_all_verified(&self) -> Vec<&NodeWrapper>;
@@ -110,12 +109,8 @@ impl NodeStorage for NodeBucketStorage {
         self.verified.count_buckets()
     }
 
-    fn count_unverified(&self) -> usize {
-        self.unverified.count()
-    }
-
-    fn count_verified(&self) -> usize {
-        self.verified.count()
+    fn count(&self) -> (usize, usize) {
+        (self.unverified.count(), self.verified.count())
     }
 
     fn get_all_unverified(&self) -> Vec<&NodeWrapper> {
@@ -168,23 +163,113 @@ impl NodeStorage for NodeBucketStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{SocketAddr, IpAddr, Ipv4Addr};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    #[test]
+    fn test_add_unverified_and_verified() {
+        for test_verified in [false, true] {
+            let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
+            let mut storage = NodeBucketStorage::new(our_id, 8);
+
+            let node1 = Node::new(
+                Id::from_hex("1234567812345678123456781234567812345678").unwrap(),
+                "1.2.3.4:1234".parse().unwrap(),
+            );
+            let node2 = Node::new(
+                Id::from_hex("5234567812345678123456781234567812345678").unwrap(),
+                "5.2.3.4:1234".parse().unwrap(),
+            );
+
+            storage.add_or_update(node1.clone(), test_verified);
+            storage.add_or_update(node2.clone(), test_verified);
+
+            let (expected_unverified, expected_verified) = match test_verified {
+                true => (0, 2),
+                false => (2, 0),
+            };
+            let unverified = storage.get_all_unverified();
+            let verified = storage.get_all_verified();
+            assert_eq!(expected_unverified, unverified.len());
+            assert_eq!(expected_verified, verified.len());
+            let counts = storage.count();
+            assert_eq!((expected_unverified, expected_verified), counts);
+
+            let populated_one = match test_verified {
+                true => &verified,
+                false => &unverified,
+            };
+
+            let node1_wrapper = populated_one.iter().find(|nw| nw.node == node1).unwrap();
+            let node2_wrapper = populated_one.iter().find(|nw| nw.node == node1).unwrap();
+
+            assert_eq!(test_verified, node1_wrapper.last_verified.is_some());
+            assert_eq!(test_verified, node2_wrapper.last_verified.is_some());
+        }
+    }
+
+    #[test]
+    fn test_node_lifecycle() {
+        let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
+        let mut storage = NodeBucketStorage::new(our_id, 8);
+
+        let node1 = Node::new(
+            Id::from_hex("1234567812345678123456781234567812345678").unwrap(),
+            "1.2.3.4:1234".parse().unwrap(),
+        );
+        // Add an unverified node
+        storage.add_or_update(node1.clone(), false);
+        let before_update = std::time::Instant::now();
+
+        // Mark the node as seen again (but not verified)
+        storage.add_or_update(node1.clone(), false);
+        let wrapper = storage.get_all_unverified()[0];
+
+        // verify last_seen was updated, but still not verified
+        assert!(wrapper.last_seen > before_update);
+        assert!(wrapper.last_verified.is_none());
+
+        // Mark the node verified
+        let before_update = std::time::Instant::now();
+        storage.add_or_update(node1.clone(), true);
+
+        let wrapper = storage.get_all_verified()[0];
+
+        // verify it's verified and last_seen updated again
+        assert!(wrapper.last_verified.is_some());
+        assert!(wrapper.last_seen > before_update);
+
+        // Mark it verified again
+        let before_update = std::time::Instant::now();
+        storage.add_or_update(node1, true);
+
+        let wrapper = storage.get_all_verified()[0];
+
+        // verify last_verified and last_seen updated again
+        assert!(wrapper.last_verified.unwrap() > before_update);
+        assert!(wrapper.last_seen > before_update);
+    }
 
     #[test]
     fn test_get_nearest_nodes() {
         let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
         let mut storage = NodeBucketStorage::new(our_id, 1);
 
-        storage.add_or_update_verified(Node::new(
-            Id::from_hex("7fffffffffffffffffffffffffffffffffffffff").unwrap(),
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
-        ));
+        storage.add_or_update(
+            Node::new(
+                Id::from_hex("7fffffffffffffffffffffffffffffffffffffff").unwrap(),
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
+            ),
+            true,
+        );
 
         let closer_id = Id::from_hex("ffffffffffffffffffffffffffffffffffffffff").unwrap();
-        storage.add_or_update_verified(Node::new(
-            closer_id,
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
-        ));
+        storage.add_or_update(
+            Node::new(
+                closer_id,
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
+            ),
+            true,
+        );
 
         let seeking_id = Id::from_hex("8000000000000000000000000000000000000000").unwrap();
 
