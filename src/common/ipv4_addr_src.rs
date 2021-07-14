@@ -8,7 +8,7 @@ pub trait IPV4AddrSource {
     /// Adds a "vote" from another node in the DHT in respose to our queries.
     fn add_vote(&mut self, their_addr: Ipv4Addr, proposed_addr: Ipv4Addr);
 
-    /// This will get called every 10 seconds - an opportunity to allow votes to decay over time.
+    /// This will get called at some regular interval - an opportunity to allow votes to decay over time.
     fn decay(&mut self);
 }
 
