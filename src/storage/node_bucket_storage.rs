@@ -225,7 +225,7 @@ mod tests {
         let wrapper = storage.get_all_unverified()[0];
 
         // verify last_seen was updated, but still not verified
-        assert!(wrapper.last_seen > before_update);
+        assert!(wrapper.last_seen >= before_update);
         assert!(wrapper.last_verified.is_none());
 
         // Mark the node verified
@@ -236,7 +236,7 @@ mod tests {
 
         // verify it's verified and last_seen updated again
         assert!(wrapper.last_verified.is_some());
-        assert!(wrapper.last_seen > before_update);
+        assert!(wrapper.last_seen >= before_update);
 
         // Mark it verified again
         let before_update = std::time::Instant::now();
@@ -246,7 +246,7 @@ mod tests {
 
         // verify last_verified and last_seen updated again
         assert!(wrapper.last_verified.unwrap() > before_update);
-        assert!(wrapper.last_seen > before_update);
+        assert!(wrapper.last_seen >= before_update);
     }
 
     #[test]
