@@ -6,8 +6,6 @@ use super::buckets::Buckets;
 use super::node_wrapper::NodeWrapper;
 
 pub trait NodeStorage {
-    fn new(our_id: Id, k: usize) -> Self;
-
     fn add_or_update(&mut self, node: Node, verified: bool);
     fn clear(&mut self);
 
@@ -29,6 +27,13 @@ pub struct NodeBucketStorage {
 }
 
 impl NodeBucketStorage {
+    fn new(our_id: Id, k: usize) -> NodeBucketStorage {
+        NodeBucketStorage {
+            verified: Buckets::new(our_id, k),
+            unverified: Buckets::new(our_id, k),
+        }
+    }
+    
     fn add_or_update_last_seen(&mut self, node: Node) {
         if let Some(existing) = self.verified.get_mut(&node.id) {
             eprintln!("Updating existing verified {:?} last seen", node);
@@ -85,13 +90,6 @@ impl NodeBucketStorage {
 }
 
 impl NodeStorage for NodeBucketStorage {
-    fn new(our_id: Id, k: usize) -> NodeBucketStorage {
-        NodeBucketStorage {
-            verified: Buckets::new(our_id, k),
-            unverified: Buckets::new(our_id, k),
-        }
-    }
-
     fn add_or_update(&mut self, node: Node, verified: bool) {
         if verified {
             self.add_or_update_verified(node);

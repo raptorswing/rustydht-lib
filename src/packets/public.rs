@@ -62,7 +62,7 @@ pub enum ResponseSpecific {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct PingRequestArguments {
-    requester_id: Id,
+    pub requester_id: Id,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -73,8 +73,8 @@ pub struct FindNodeRequestArguments {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct GetPeersRequestArguments {
-    info_hash: Id,
-    requester_id: Id,
+    pub info_hash: Id,
+    pub requester_id: Id,
 }
 
 #[derive(Debug, PartialEq, Clone)]

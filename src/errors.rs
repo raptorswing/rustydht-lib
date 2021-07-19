@@ -8,4 +8,7 @@ pub enum RustyDHTError {
 
     #[error("Failed to serialize msg: {0}")]
     PacketSerializationError(#[from] serde_bencode::Error),
+
+    #[error("General error: {0}")]
+    GeneralError(#[source]anyhow::Error)
 }
