@@ -90,14 +90,14 @@ impl RequestInfo {
 mod tests {
     use super::*;
 
-    use crate::packets::{create_ping_request, create_ping_response};
+    use crate::packets::Message;
 
     #[test]
     fn test_outbound_request_storage() {
         let mut storage = OutboundRequestStorage::new();
 
         let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
-        let req = create_ping_request(our_id);
+        let req = Message::create_ping_request(our_id);
 
         let request_info = RequestInfo::new("127.0.0.1:1234".parse().unwrap(), None, req.clone());
 
@@ -106,7 +106,7 @@ mod tests {
         assert!(storage.has_request(&req.transaction_id));
 
         // Simulate a response, see if we correctly get the requet back from storage
-        let simulated_response = create_ping_response(
+        let simulated_response = Message::create_ping_response(
             our_id,
             req.transaction_id.clone(),
             "127.0.0.1:1235".parse().unwrap(),
@@ -129,8 +129,8 @@ mod tests {
         let mut storage = OutboundRequestStorage::new();
 
         let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
-        let req = create_ping_request(our_id);
-        let req_2 = create_ping_request(our_id);
+        let req = Message::create_ping_request(our_id);
+        let req_2 = Message::create_ping_request(our_id);
 
         let request_info = RequestInfo::new("127.0.0.1:1234".parse().unwrap(), None, req.clone());
         let mut request_info_2 =

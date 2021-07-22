@@ -1,4 +1,4 @@
-use crate::common::{Id, Node, ID_SIZE};
+use crate::common::{Id, Node, ID_SIZE, TransactionId};
 use crate::errors;
 
 use super::internal;
@@ -397,6 +397,73 @@ impl Message {
     pub fn from_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<Message, errors::RustyDHTError> {
         Message::from_serde_message(internal::DHTMessage::from_bytes(bytes)?)
     }
+
+    pub fn create_ping_request(requester_id: Id) -> Message {
+        let mut rng = thread_rng();
+        Message {
+            transaction_id: vec![rng.gen(), rng.gen()],
+            version: None,
+            requester_ip: None,
+            message_type: MessageType::Request(RequestSpecific::PingRequest(PingRequestArguments {
+                requester_id: requester_id,
+            })),
+        }
+    }
+    
+    pub fn create_ping_response(
+        responder_id: Id,
+        transaction_id: Vec<u8>,
+        remote: SocketAddr,
+    ) -> Message {
+        Message {
+            transaction_id: transaction_id,
+            version: None,
+            requester_ip: Some(remote),
+            message_type: MessageType::Response(ResponseSpecific::PingResponse(
+                PingResponseArguments {
+                    responder_id: responder_id,
+                },
+            )),
+        }
+    }
+
+    pub fn create_get_peers_response_no_peers(
+        responder_id: Id,
+        transaction_id: Vec<u8>,
+        requester_ip: SocketAddr,
+        token: Vec<u8>,
+        nearest_nodes: Vec<Node>,
+    ) -> Message {
+        Message {
+            transaction_id: transaction_id,
+            version: None,
+            requester_ip: Some(requester_ip),
+            message_type: MessageType::Response(ResponseSpecific::GetPeersResponse(GetPeersResponseArguments {
+                responder_id: responder_id,
+                token: token,
+                values: GetPeersResponseValues::Nodes(nearest_nodes)
+            }))
+        }
+    }
+
+    pub fn create_get_peers_response_peers(
+        responder_id: Id,
+        transaction_id: Vec<u8>,
+        requester_ip: SocketAddr,
+        token: Vec<u8>,
+        peers: Vec<SocketAddr>,
+    ) -> Message {
+        Message {
+            transaction_id: transaction_id,
+            version: None,
+            requester_ip: Some(requester_ip),
+            message_type: MessageType::Response(ResponseSpecific::GetPeersResponse(GetPeersResponseArguments {
+                responder_id: responder_id,
+                token: token,
+                values: GetPeersResponseValues::Peers(peers)
+            }))
+        }
+    }
 }
 
 /// Returns true if the response and request types specified match.
@@ -423,35 +490,6 @@ pub fn response_matches_request(res: &ResponseSpecific, req: &RequestSpecific) -
         }
     }
     return false;
-}
-
-pub fn create_ping_request(requester_id: Id) -> Message {
-    let mut rng = thread_rng();
-    Message {
-        transaction_id: vec![rng.gen(), rng.gen()],
-        version: None,
-        requester_ip: None,
-        message_type: MessageType::Request(RequestSpecific::PingRequest(PingRequestArguments {
-            requester_id: requester_id,
-        })),
-    }
-}
-
-pub fn create_ping_response(
-    responder_id: Id,
-    transaction_id: Vec<u8>,
-    remote: SocketAddr,
-) -> Message {
-    Message {
-        transaction_id: transaction_id,
-        version: None,
-        requester_ip: Some(remote),
-        message_type: MessageType::Response(ResponseSpecific::PingResponse(
-            PingResponseArguments {
-                responder_id: responder_id,
-            },
-        )),
-    }
 }
 
 fn bytes_to_sockaddr<T: AsRef<[u8]>>(bytes: T) -> Result<SocketAddr, errors::RustyDHTError> {
@@ -482,7 +520,7 @@ fn bytes_to_sockaddr<T: AsRef<[u8]>>(bytes: T) -> Result<SocketAddr, errors::Rus
     }
 }
 
-fn sockaddr_to_bytes(sockaddr: &SocketAddr) -> Vec<u8> {
+pub fn sockaddr_to_bytes(sockaddr: &SocketAddr) -> Vec<u8> {
     let mut to_ret = Vec::new();
 
     match sockaddr {

@@ -27,7 +27,7 @@ pub struct NodeBucketStorage {
 }
 
 impl NodeBucketStorage {
-    fn new(our_id: Id, k: usize) -> NodeBucketStorage {
+    pub fn new(our_id: Id, k: usize) -> NodeBucketStorage {
         NodeBucketStorage {
             verified: Buckets::new(our_id, k),
             unverified: Buckets::new(our_id, k),
