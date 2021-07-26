@@ -427,6 +427,19 @@ impl Message {
         }
     }
 
+    pub fn create_get_peers_request(requester_id: Id, info_hash: Id) -> Message {
+        let mut rng = thread_rng();
+        Message {
+            transaction_id: vec![rng.gen(), rng.gen()],
+            version: None,
+            requester_ip: None,
+            message_type: MessageType::Request(RequestSpecific::GetPeersRequest(GetPeersRequestArguments {
+                requester_id: requester_id,
+                info_hash: info_hash,
+            }))
+        }
+    }
+
     pub fn create_get_peers_response_no_peers(
         responder_id: Id,
         transaction_id: Vec<u8>,

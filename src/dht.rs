@@ -101,6 +101,7 @@ pub struct DHT {
 
 impl DHT {
     pub fn new<B>(
+        id: Option<Id>,
         listen_port: u16,
         ip4_source: Box<dyn IPV4AddrSource>,
         buckets: B,
@@ -110,22 +111,29 @@ impl DHT {
     where
         B: FnOnce(Id) -> Box<dyn NodeStorage>,
     {
-        // Decide on an initial node id based on best current guess of our IPv4 address.
-        // It's OK if we don't know yet, we'll change our id later if needed.
-        let our_id = match ip4_source.get_best_ipv4() {
-            Some(ip) => {
-                let id = Id::from_ip(&IpAddr::V4(ip));
-                eprintln!(
-                    "Our external IPv4 is {:?}. Generated id {} based on that",
-                    ip, id
-                );
-                id
-            }
+        // If we were given a hardcoded id, use that until/unless we decide its invalid based on IP source.
+        // If we weren't given a hardcoded id, try to generate one based on IP source.
+        // Finally, if all else fails, generate a totally random id.
+        let our_id = {
+            match id {
+                Some(id) => id,
 
-            None => {
-                let id = Id::from_random(&mut thread_rng());
-                eprintln!("No external IPv4 provided. Using random id {} for now.", id);
-                id
+                None => match ip4_source.get_best_ipv4() {
+                    Some(ip) => {
+                        let id = Id::from_ip(&IpAddr::V4(ip));
+                        eprintln!(
+                            "Our external IPv4 is {:?}. Generated id {} based on that",
+                            ip, id
+                        );
+                        id
+                    }
+
+                    None => {
+                        let id = Id::from_random(&mut thread_rng());
+                        eprintln!("No external IPv4 provided. Using random id {} for now.", id);
+                        id
+                    }
+                },
             }
         };
 
@@ -523,33 +531,22 @@ fn calculate_token<T: AsRef<[u8]>>(remote: &SocketAddr, secret: T) -> [u8; 4] {
 mod test {
     use super::*;
     use crate::common::ipv4_addr_src::StaticIPV4AddrSource;
+    use lazy_static::lazy_static;
     use std::boxed::Box;
+
+    // Tests reuse the same UDP port. This mutex is used to serialize tests that need the UDP port.
+    lazy_static! {
+        static ref LOCK: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+    }
 
     #[test]
     fn test_responds_to_ping() -> Result<(), RustyDHTError> {
         smol::block_on(async {
-            let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
-            let ip = IpAddr::V4(ipv4);
-            let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
-            let buckets = |id| -> Box<dyn NodeStorage> {
-                Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
-                    id, 8,
-                ))
-            };
-            let dht = DHT::new(10001, phony_ip4, buckets, &[], DHTSettings::default()).unwrap();
-
-            let mut throttler = crate::storage::throttler::Throttler::new(
-                100,
-                Duration::from_secs(1),
-                Duration::from_secs(1),
-            );
-            let mut recv_buf = [0; 2048];
-
-            let requester_id = Id::from_ip(&ip);
+            let requester_id = Id::from_random(&mut thread_rng());
             let ping_request = packets::Message::create_ping_request(requester_id);
 
             let res = futures::try_join!(
-                dht.accept_single_packet(&mut throttler, &mut recv_buf),
+                accept_single_packet(),
                 send_and_receive(ping_request.clone()),
             )
             .map(|res| res.1)?;
@@ -559,7 +556,7 @@ mod test {
                 res.message_type,
                 packets::MessageType::Response(packets::ResponseSpecific::PingResponse(
                     packets::PingResponseArguments {
-                        responder_id: dht.get_id()
+                        responder_id: get_dht_id()
                     }
                 ))
             );
@@ -568,6 +565,66 @@ mod test {
         })
     }
 
+    #[test]
+    fn test_responds_to_get_peers() -> Result<(), RustyDHTError> {
+        smol::block_on(async {
+            let requester_id = Id::from_random(&mut thread_rng());
+            let desired_info_hash = Id::from_random(&mut thread_rng());
+            let request =
+                packets::Message::create_get_peers_request(requester_id, desired_info_hash);
+
+            let res = futures::try_join!(accept_single_packet(), send_and_receive(request.clone()))
+                .map(|res| res.1)?;
+
+            assert_eq!(res.transaction_id, request.transaction_id);
+            assert!(matches!(
+                res.message_type,
+                packets::MessageType::Response(packets::ResponseSpecific::GetPeersResponse(
+                    packets::GetPeersResponseArguments { .. }
+                ))
+            ));
+
+            Ok(())
+        })
+    }
+
+    // Dumb helper function because we can't declare a const or static Id
+    fn get_dht_id() -> Id {
+        Id::from_hex("0011223344556677889900112233445566778899").unwrap()
+    }
+
+    // Helper function that creates a test DHT, handles a single packet, and returns
+    async fn accept_single_packet() -> Result<(), RustyDHTError> {
+        let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
+        let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
+        let buckets = |id| -> Box<dyn NodeStorage> {
+            Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
+                id, 8,
+            ))
+        };
+        let _lock = LOCK.lock();
+        let dht = DHT::new(
+            Some(get_dht_id()),
+            10001,
+            phony_ip4,
+            buckets,
+            &[],
+            DHTSettings::default(),
+        )
+        .unwrap();
+
+        let mut throttler = crate::storage::throttler::Throttler::new(
+            100,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        );
+        let mut recv_buf = [0; 2048];
+
+        dht.accept_single_packet(&mut throttler, &mut recv_buf)
+            .await
+    }
+
+    // Helper function that sends a single packet to the test DHT and then returns the response
     async fn send_and_receive(msg: packets::Message) -> Result<packets::Message, RustyDHTError> {
         let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         sock.send_to(&msg.clone().to_bytes().unwrap(), "127.0.0.1:10001")
