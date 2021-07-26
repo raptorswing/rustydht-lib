@@ -100,7 +100,7 @@ pub enum GetPeersResponseValues {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct PingResponseArguments {
-    responder_id: Id,
+    pub responder_id: Id,
 }
 
 #[derive(Debug, PartialEq, Clone)]
