@@ -292,33 +292,33 @@ impl DHT {
                         self.send_to(&reply_bytes, addr).await?;
                     }
 
-                    // super::packets::KRPCRequestSpecific::KRPCFindNodeRequest { arguments } => {
-                    //     // Is id valid for IP?
-                    //     let id = MainlineId::from_bytes(&arguments.id)?;
-                    //     let is_id_valid = id.is_valid_for_ip(&addr.ip());
-                    //     if is_id_valid {
-                    //         self.buckets
-                    //             .lock()
-                    //             .await
-                    //             .add_or_update(super::Node::new(id, addr), false);
-                    //     }
+                    packets::RequestSpecific::FindNodeRequest(arguments) => {
+                        // Is id valid for IP?
+                        let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
+                        if is_id_valid {
+                            self.buckets
+                                .lock()
+                                .await
+                                .add_or_update(Node::new(arguments.requester_id, addr), false);
+                        }
 
-                    //     let target = MainlineId::from_bytes(&arguments.target)?;
+                        // We're fine to respond regardless
+                        let buckets = self.buckets.lock().await;
+                        let nearest = buckets
+                            .get_nearest_nodes(&arguments.target, Some(&arguments.requester_id))
+                            .iter()
+                            .map(|&n_ref| n_ref.clone())
+                            .collect();
 
-                    //     // We're fine to respond regardless
-                    //     let buckets = self.buckets.lock().await;
-                    //     let nearest = buckets.get_nearest_nodes(&target, Some(&id));
-
-                    //     let reply = super::packets::create_find_node_response(
-                    //         &self.our_id.borrow(),
-                    //         msg.transaction_id,
-                    //         &addr,
-                    //         &nearest,
-                    //     );
-                    //     let reply_bytes = serde_bencode::to_bytes(&reply)
-                    //         .expect("Failed to prepare find_node reply");
-                    //     send_to!(self.socket, &reply_bytes, addr);
-                    // }
+                        let reply = packets::Message::create_find_node_response(
+                            self.our_id.borrow().clone(),
+                            msg.transaction_id,
+                            addr,
+                            nearest,
+                        );
+                        let reply_bytes = reply.to_bytes()?;
+                        self.send_to(&reply_bytes, addr).await?;
+                    }
 
                     // super::packets::KRPCRequestSpecific::KRPCAnnouncePeerRequest { arguments } => {
                     //     let id = MainlineId::from_bytes(&arguments.id)?;
@@ -581,6 +581,28 @@ mod test {
                 res.message_type,
                 packets::MessageType::Response(packets::ResponseSpecific::GetPeersResponse(
                     packets::GetPeersResponseArguments { .. }
+                ))
+            ));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_responds_to_find_node() -> Result<(), RustyDHTError> {
+        let requester_id = Id::from_random(&mut thread_rng());
+        let target = Id::from_random(&mut thread_rng());
+        smol::block_on(async {
+            let request = packets::Message::create_find_node_request(requester_id, target);
+
+            let res = futures::try_join!(accept_single_packet(), send_and_receive(request.clone()))
+                .map(|res| res.1)?;
+
+            assert_eq!(res.transaction_id, request.transaction_id);
+            assert!(matches!(
+                res.message_type,
+                packets::MessageType::Response(packets::ResponseSpecific::FindNodeResponse(
+                    packets::FindNodeResponseArguments { .. }
                 ))
             ));
 

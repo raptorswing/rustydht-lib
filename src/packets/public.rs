@@ -1,4 +1,4 @@
-use crate::common::{Id, Node, ID_SIZE, TransactionId};
+use crate::common::{Id, Node, TransactionId, ID_SIZE};
 use crate::errors;
 
 use super::internal;
@@ -67,8 +67,8 @@ pub struct PingRequestArguments {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct FindNodeRequestArguments {
-    target: Id,
-    requester_id: Id,
+    pub target: Id,
+    pub requester_id: Id,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -404,12 +404,13 @@ impl Message {
             transaction_id: vec![rng.gen(), rng.gen()],
             version: None,
             requester_ip: None,
-            message_type: MessageType::Request(RequestSpecific::PingRequest(PingRequestArguments {
-                requester_id: requester_id,
-            })),
+            message_type: MessageType::Request(RequestSpecific::PingRequest(
+                PingRequestArguments {
+                    requester_id: requester_id,
+                },
+            )),
         }
     }
-    
     pub fn create_ping_response(
         responder_id: Id,
         transaction_id: Vec<u8>,
@@ -433,10 +434,12 @@ impl Message {
             transaction_id: vec![rng.gen(), rng.gen()],
             version: None,
             requester_ip: None,
-            message_type: MessageType::Request(RequestSpecific::GetPeersRequest(GetPeersRequestArguments {
-                requester_id: requester_id,
-                info_hash: info_hash,
-            }))
+            message_type: MessageType::Request(RequestSpecific::GetPeersRequest(
+                GetPeersRequestArguments {
+                    requester_id: requester_id,
+                    info_hash: info_hash,
+                },
+            )),
         }
     }
 
@@ -451,11 +454,13 @@ impl Message {
             transaction_id: transaction_id,
             version: None,
             requester_ip: Some(requester_ip),
-            message_type: MessageType::Response(ResponseSpecific::GetPeersResponse(GetPeersResponseArguments {
-                responder_id: responder_id,
-                token: token,
-                values: GetPeersResponseValues::Nodes(nearest_nodes)
-            }))
+            message_type: MessageType::Response(ResponseSpecific::GetPeersResponse(
+                GetPeersResponseArguments {
+                    responder_id: responder_id,
+                    token: token,
+                    values: GetPeersResponseValues::Nodes(nearest_nodes),
+                },
+            )),
         }
     }
 
@@ -470,11 +475,47 @@ impl Message {
             transaction_id: transaction_id,
             version: None,
             requester_ip: Some(requester_ip),
-            message_type: MessageType::Response(ResponseSpecific::GetPeersResponse(GetPeersResponseArguments {
-                responder_id: responder_id,
-                token: token,
-                values: GetPeersResponseValues::Peers(peers)
-            }))
+            message_type: MessageType::Response(ResponseSpecific::GetPeersResponse(
+                GetPeersResponseArguments {
+                    responder_id: responder_id,
+                    token: token,
+                    values: GetPeersResponseValues::Peers(peers),
+                },
+            )),
+        }
+    }
+
+    pub fn create_find_node_request(requester_id: Id, target: Id) -> Message {
+        let mut rng = thread_rng();
+        Message {
+            transaction_id: vec![rng.gen(), rng.gen()],
+            version: None,
+            requester_ip: None,
+            message_type: MessageType::Request(RequestSpecific::FindNodeRequest(
+                FindNodeRequestArguments {
+                    requester_id: requester_id,
+                    target: target,
+                },
+            )),
+        }
+    }
+
+    pub fn create_find_node_response(
+        responder_id: Id,
+        transaction_id: Vec<u8>,
+        requester_ip: SocketAddr,
+        nodes: Vec<Node>,
+    ) -> Message {
+        Message {
+            transaction_id: transaction_id,
+            version: None,
+            requester_ip: Some(requester_ip),
+            message_type: MessageType::Response(ResponseSpecific::FindNodeResponse(
+                FindNodeResponseArguments {
+                    responder_id: responder_id,
+                    nodes: nodes,
+                },
+            )),
         }
     }
 }
@@ -817,12 +858,12 @@ mod tests {
     #[test]
     fn test_response_matches_request_find_node() {
         let res = ResponseSpecific::FindNodeResponse(FindNodeResponseArguments {
-            nodes: vec!(),
-            responder_id: Id::from_random(&mut thread_rng())
+            nodes: vec![],
+            responder_id: Id::from_random(&mut thread_rng()),
         });
         let req = RequestSpecific::FindNodeRequest(FindNodeRequestArguments {
             requester_id: Id::from_random(&mut thread_rng()),
-            target: Id::from_random(&mut thread_rng())
+            target: Id::from_random(&mut thread_rng()),
         });
         assert_eq!(true, response_matches_request(&res, &req));
     }
@@ -830,7 +871,7 @@ mod tests {
     #[test]
     fn test_response_matches_request_find_ping() {
         let res = ResponseSpecific::PingResponse(PingResponseArguments {
-            responder_id: Id::from_random(&mut thread_rng())
+            responder_id: Id::from_random(&mut thread_rng()),
         });
         let req = RequestSpecific::PingRequest(PingRequestArguments {
             requester_id: Id::from_random(&mut thread_rng()),
@@ -841,11 +882,11 @@ mod tests {
     #[test]
     fn test_response_matches_request_find_nonmatching() {
         let res = ResponseSpecific::PingResponse(PingResponseArguments {
-            responder_id: Id::from_random(&mut thread_rng())
+            responder_id: Id::from_random(&mut thread_rng()),
         });
         let req = RequestSpecific::FindNodeRequest(FindNodeRequestArguments {
             requester_id: Id::from_random(&mut thread_rng()),
-            target: Id::from_random(&mut thread_rng())
+            target: Id::from_random(&mut thread_rng()),
         });
         assert_eq!(false, response_matches_request(&res, &req));
     }
