@@ -251,11 +251,10 @@ impl DHT {
                         // First, see if we have any peers for their info_hash
                         let peers = {
                             let peer_storage = self.peer_storage.lock().await;
+                            let newer_than = Instant::now().checked_sub(Duration::from_secs(self.settings.get_peers_freshness_secs));
                             let mut peers = peer_storage.get_peers(
                                 &arguments.info_hash,
-                                Some(Instant::now().sub(Duration::from_secs(
-                                    self.settings.get_peers_freshness_secs,
-                                ))),
+                                newer_than,
                             );
                             peers.truncate(self.settings.max_peers_response);
                             peers
