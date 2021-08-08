@@ -33,7 +33,6 @@ impl NodeBucketStorage {
             unverified: Buckets::new(our_id, k),
         }
     }
-    
     fn add_or_update_last_seen(&mut self, node: Node) {
         if let Some(existing) = self.verified.get_mut(&node.id) {
             eprintln!("Updating existing verified {:?} last seen", node);
@@ -238,12 +237,22 @@ mod tests {
 
         // Mark it verified again
         let before_update = std::time::Instant::now();
-        storage.add_or_update(node1, true);
+        storage.add_or_update(node1.clone(), true);
 
         let wrapper = storage.get_all_verified()[0];
 
         // verify last_verified and last_seen updated again
         assert!(wrapper.last_verified.unwrap() > before_update);
+        assert!(wrapper.last_seen >= before_update);
+
+        // Mark it seen (not verified)
+        let before_update = std::time::Instant::now();
+        storage.add_or_update(node1, false);
+
+        let wrapper = storage.get_all_verified()[0];
+
+        // It should still be verified but last_seen should be updated
+        assert!(wrapper.last_verified.unwrap() <= before_update);
         assert!(wrapper.last_seen >= before_update);
     }
 
