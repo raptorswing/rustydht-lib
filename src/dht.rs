@@ -1,7 +1,5 @@
 use rand::{thread_rng, Rng};
 
-use anyhow::anyhow;
-
 use smol::lock::Mutex;
 use smol::net::UdpSocket;
 
@@ -10,7 +8,6 @@ use crc::{crc32, Hasher32};
 
 use std::cell::RefCell;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::ops::Sub;
 use std::time::{Duration, Instant};
 
 use crate::common::ipv4_addr_src::IPV4AddrSource;
@@ -251,11 +248,11 @@ impl DHT {
                         // First, see if we have any peers for their info_hash
                         let peers = {
                             let peer_storage = self.peer_storage.lock().await;
-                            let newer_than = Instant::now().checked_sub(Duration::from_secs(self.settings.get_peers_freshness_secs));
-                            let mut peers = peer_storage.get_peers(
-                                &arguments.info_hash,
-                                newer_than,
-                            );
+                            let newer_than = Instant::now().checked_sub(Duration::from_secs(
+                                self.settings.get_peers_freshness_secs,
+                            ));
+                            let mut peers =
+                                peer_storage.get_peers(&arguments.info_hash, newer_than);
                             peers.truncate(self.settings.max_peers_response);
                             peers
                         };
@@ -319,66 +316,54 @@ impl DHT {
                         self.send_to(&reply_bytes, addr).await?;
                     }
 
-                    // super::packets::KRPCRequestSpecific::KRPCAnnouncePeerRequest { arguments } => {
-                    //     let id = MainlineId::from_bytes(&arguments.id)?;
-                    //     let is_id_valid = id.is_valid_for_ip(&addr.ip());
+                    packets::RequestSpecific::AnnouncePeerRequest(arguments) => {
+                        let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
 
-                    //     let info_hash = MainlineId::from_bytes(&arguments.info_hash)?;
+                        let is_token_valid = arguments.token
+                            == calculate_token(&addr, self.token_secret.borrow().clone())
+                            || arguments.token
+                                == calculate_token(&addr, self.old_token_secret.borrow().clone());
 
-                    //     let is_token_valid = arguments.token
-                    //         == super::packets::calculate_token(&addr, *self.token_secret.borrow())
-                    //         || arguments.token
-                    //             == super::packets::calculate_token(
-                    //                 &addr,
-                    //                 *self.old_token_secret.borrow(),
-                    //             );
+                        if is_id_valid {
+                            if is_token_valid {
+                                self.buckets
+                                    .lock()
+                                    .await
+                                    .add_or_update(Node::new(arguments.requester_id, addr), true);
+                            } else {
+                                self.buckets
+                                    .lock()
+                                    .await
+                                    .add_or_update(Node::new(arguments.requester_id, addr), false);
+                            }
+                        }
 
-                    //     if is_id_valid {
-                    //         if is_token_valid {
-                    //             self.buckets
-                    //                 .lock()
-                    //                 .await
-                    //                 .add_or_update(super::Node::new(id, addr), true);
-                    //         } else {
-                    //             self.buckets
-                    //                 .lock()
-                    //                 .await
-                    //                 .add_or_update(super::Node::new(id, addr), false);
-                    //         }
-                    //     }
+                        if is_token_valid {
+                            let sockaddr = match arguments.implied_port {
+                                Some(implied_port) if implied_port == true => addr,
 
-                    //     if is_token_valid {
-                    //         self.buckets
-                    //             .lock()
-                    //             .await
-                    //             .add_or_update(super::Node::new(id, addr), true);
+                                _ => {
+                                    let mut tmp = addr.clone();
+                                    tmp.set_port(arguments.port);
+                                    tmp
+                                }
+                            };
 
-                    //         let sockaddr = match arguments.implied_port {
-                    //             Some(byte) if byte != 0x0 => addr,
+                            self.peer_storage
+                                .lock()
+                                .await
+                                .announce_peer(arguments.info_hash, sockaddr);
 
-                    //             _ => {
-                    //                 let mut tmp = addr.clone();
-                    //                 tmp.set_port(arguments.port);
-                    //                 tmp
-                    //             }
-                    //         };
-
-                    //         self.peer_storage
-                    //             .lock()
-                    //             .await
-                    //             .announce_peer(&info_hash, sockaddr);
-
-                    //         // Response is same for ping, so reuse that
-                    //         let reply = super::packets::create_ping_response(
-                    //             &self.our_id.borrow(),
-                    //             msg.transaction_id,
-                    //             &addr,
-                    //         );
-                    //         let reply_bytes = serde_bencode::to_bytes(&reply)
-                    //             .expect("Failed to prepare find_node reply");
-                    //         send_to!(self.socket, &reply_bytes, addr);
-                    //     }
-                    // }
+                            // Response is same for ping, so reuse that
+                            let reply = packets::Message::create_ping_response(
+                                *self.our_id.borrow(),
+                                msg.transaction_id.clone(),
+                                addr,
+                            );
+                            let reply_bytes = reply.to_bytes()?;
+                            self.send_to(&reply_bytes, addr).await?;
+                        }
+                    }
 
                     // super::packets::KRPCRequestSpecific::KRPCSampleInfoHashesRequest {
                     //     arguments,
@@ -389,7 +374,7 @@ impl DHT {
                     //     let is_id_valid = id.is_valid_for_ip(&addr.ip());
                     //     let mut buckets = self.buckets.lock().await;
                     //     if is_id_valid {
-                    //         buckets.add_or_update(super::Node::new(id, addr), false);
+                    //         buckets.add_or_update(Node::new(id, addr), false);
                     //     }
 
                     //     let nearest = buckets.get_nearest_nodes(&target, Some(&id));
@@ -446,7 +431,7 @@ impl DHT {
                     //     let mut request_storage = self.request_storage.lock().await;
 
                     //     if request_storage.take_matching_request_info(&msg).is_some() {
-                    //         buckets.add_or_update(super::Node::new(id, addr), true);
+                    //         buckets.add_or_update(Node::new(id, addr), true);
                     //     }
                     // }
 
@@ -468,7 +453,7 @@ impl DHT {
                     //     let mut request_storage = self.request_storage.lock().await;
 
                     //     if request_storage.take_matching_request_info(&msg).is_some() {
-                    //         buckets.add_or_update(super::Node::new(their_id, addr), true);
+                    //         buckets.add_or_update(Node::new(their_id, addr), true);
 
                     //         // Add the nodes we got back as "seen" (even though we haven't necessarily seen them directly yet).
                     //         // We'll ping them and try to verify them

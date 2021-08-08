@@ -85,11 +85,11 @@ pub struct SampleInfoHashesRequestArguments {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct AnnouncePeerRequestArguments {
-    requester_id: Id,
-    info_hash: Id,
-    port: u16,
-    implied_port: Option<bool>,
-    token: Vec<u8>,
+    pub requester_id: Id,
+    pub info_hash: Id,
+    pub port: u16,
+    pub implied_port: Option<bool>,
+    pub token: Vec<u8>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
