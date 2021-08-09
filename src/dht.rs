@@ -520,6 +520,7 @@ fn calculate_token<T: AsRef<[u8]>>(remote: &SocketAddr, secret: T) -> [u8; 4] {
 mod test {
     use super::*;
     use crate::common::ipv4_addr_src::StaticIPV4AddrSource;
+    use anyhow::anyhow;
     use lazy_static::lazy_static;
     use std::boxed::Box;
 
@@ -599,13 +600,66 @@ mod test {
         })
     }
 
+    #[test]
+    fn test_responds_to_announce_peer() -> Result<(), RustyDHTError> {
+        let requester_id = Id::from_random(&mut thread_rng());
+        let info_hash = Id::from_random(&mut thread_rng());
+        smol::block_on(async {
+            let res = futures::try_join!(
+                accept_packets(2),
+                get_token_announce_peer(requester_id, info_hash)
+            )
+            .map(|res| res.1)?;
+
+            assert!(matches!(
+                res.message_type,
+                packets::MessageType::Response(packets::ResponseSpecific::PingResponse(
+                    packets::PingResponseArguments { .. }
+                ))
+            ));
+
+            Ok(())
+        })
+    }
+
     // Dumb helper function because we can't declare a const or static Id
     fn get_dht_id() -> Id {
         Id::from_hex("0011223344556677889900112233445566778899").unwrap()
     }
 
+    // Helper function for test_announce_peer. When will async closure be stable!?
+    async fn get_token_announce_peer(
+        requester_id: Id,
+        info_hash: Id,
+    ) -> Result<packets::Message, RustyDHTError> {
+        let req = packets::Message::create_get_peers_request(requester_id, info_hash);
+        let res = send_and_receive(req).await?;
+        eprintln!("Got get_peers response");
+
+        if let packets::MessageType::Response(packets::ResponseSpecific::GetPeersResponse(
+            packets::GetPeersResponseArguments { token, .. },
+        )) = res.message_type
+        {
+            let req = packets::Message::create_announce_peer_request(
+                requester_id,
+                info_hash,
+                1234,
+                true,
+                token,
+            );
+            send_and_receive(req).await
+        } else {
+            Err(RustyDHTError::GeneralError(anyhow!("Wrong packet")))
+        }
+    }
+
     // Helper function that creates a test DHT, handles a single packet, and returns
     async fn accept_single_packet() -> Result<(), RustyDHTError> {
+        accept_packets(1).await
+    }
+
+    // Helper function creates test DHT, handles given number of packets, and returns
+    async fn accept_packets(num: usize) -> Result<(), RustyDHTError> {
         let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
         let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
         let buckets = |id| -> Box<dyn NodeStorage> {
@@ -631,8 +685,11 @@ mod test {
         );
         let mut recv_buf = [0; 2048];
 
-        dht.accept_single_packet(&mut throttler, &mut recv_buf)
-            .await
+        for _ in 0..num {
+            dht.accept_single_packet(&mut throttler, &mut recv_buf)
+                .await?;
+        }
+        Ok(())
     }
 
     // Helper function that sends a single packet to the test DHT and then returns the response

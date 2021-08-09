@@ -111,9 +111,9 @@ pub struct FindNodeResponseArguments {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct GetPeersResponseArguments {
-    responder_id: Id,
-    token: Vec<u8>,
-    values: GetPeersResponseValues,
+    pub responder_id: Id,
+    pub token: Vec<u8>,
+    pub values: GetPeersResponseValues,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -514,6 +514,30 @@ impl Message {
                 FindNodeResponseArguments {
                     responder_id: responder_id,
                     nodes: nodes,
+                },
+            )),
+        }
+    }
+
+    pub fn create_announce_peer_request(
+        requester_id: Id,
+        info_hash: Id,
+        port: u16,
+        implied_port: bool,
+        token: Vec<u8>,
+    ) -> Message {
+        let mut rng = thread_rng();
+        Message {
+            transaction_id: vec![rng.gen(), rng.gen()],
+            version: None,
+            requester_ip: None,
+            message_type: MessageType::Request(RequestSpecific::AnnouncePeerRequest(
+                AnnouncePeerRequestArguments {
+                    requester_id: requester_id,
+                    implied_port: Some(implied_port),
+                    port: port,
+                    info_hash: info_hash,
+                    token: token,
                 },
             )),
         }
