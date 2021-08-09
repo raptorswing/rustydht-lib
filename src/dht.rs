@@ -504,7 +504,12 @@ impl DHT {
 fn calculate_token<T: AsRef<[u8]>>(remote: &SocketAddr, secret: T) -> [u8; 4] {
     let secret = secret.as_ref();
     let mut digest = crc32::Digest::new(crc32::CASTAGNOLI);
-    digest.write(&crate::packets::sockaddr_to_bytes(remote));
+    // digest.write(&crate::packets::sockaddr_to_bytes(remote));
+    let octets = match remote.ip() {
+        std::net::IpAddr::V4(v4) => v4.octets().to_vec(),
+        std::net::IpAddr::V6(v6) => v6.octets().to_vec(),
+    };
+    digest.write(&octets);
     digest.write(secret);
     let checksum: u32 = digest.sum32();
 
