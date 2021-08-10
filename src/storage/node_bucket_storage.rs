@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::common::{Id, Node};
 
@@ -17,7 +17,9 @@ pub trait NodeStorage {
     fn get_nearest_nodes(&self, id: &Id, exclude: Option<&Id>) -> Vec<&Node>;
 
     /// Prunes verified to unverified. Prunes unverified to death.
-    fn prune(&mut self, time: &Instant, unverified_time: &Instant);
+    /// In limited cases pruning may not occur as soon as it can due to overflow issues with the monotonic clock.
+    /// So the grace_periods are really minimum durations that an entry will go before being pruned.
+    fn prune(&mut self, grace_period: Duration, unverified_grace_period: Duration);
     fn set_id(&mut self, our_id: Id);
 }
 
@@ -126,29 +128,33 @@ impl NodeStorage for NodeBucketStorage {
             .collect()
     }
 
-    fn prune(&mut self, time: &Instant, unverified_time: &Instant) {
-        self.verified.retain(|nw| {
-            if let Some(last_verified) = nw.last_verified {
-                return last_verified >= *time;
+    fn prune(&mut self, grace_period: Duration, unverified_grace_period: Duration) {
+        if let Some(time) = Instant::now().checked_sub(grace_period) {
+            if let Some(unverified_time) = Instant::now().checked_sub(unverified_grace_period) {
+                self.verified.retain(|nw| {
+                    if let Some(last_verified) = nw.last_verified {
+                        return last_verified >= time;
+                    }
+                    eprintln!("Verified {:?} hasn't verified recently. Removing.", nw.node);
+                    return false;
+                });
+        
+                self.unverified.retain(|nw| {
+                    if let Some(last_verified) = nw.last_verified {
+                        if last_verified >= time {
+                            return true;
+                        }
+                    }
+        
+                    if nw.last_seen >= time && nw.last_seen >= unverified_time {
+                        return true;
+                    }
+        
+                    eprintln!("Unverified {:?} is dead. Removing", nw.node);
+                    return false;
+                });
             }
-            eprintln!("Verified {:?} hasn't verified recently. Removing.", nw.node);
-            return false;
-        });
-
-        self.unverified.retain(|nw| {
-            if let Some(last_verified) = nw.last_verified {
-                if last_verified >= *time {
-                    return true;
-                }
-            }
-
-            if nw.last_seen >= *time && nw.last_seen >= *unverified_time {
-                return true;
-            }
-
-            eprintln!("Unverified {:?} is dead. Removing", nw.node);
-            return false;
-        });
+        }
     }
 
     fn set_id(&mut self, new_id: Id) {
@@ -290,10 +296,8 @@ mod tests {
     fn test_empty_prune() {
         let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
         let mut storage = NodeBucketStorage::new(our_id, 1);
-        let earlier = Instant::now()
-            .checked_sub(Duration::from_secs(600))
-            .unwrap();
 
-        storage.prune(&earlier, &earlier);
+        let period = Duration::from_secs(600);
+        storage.prune(period, period);
     }
 }
