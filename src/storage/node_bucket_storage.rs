@@ -161,6 +161,7 @@ impl NodeStorage for NodeBucketStorage {
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::time::Duration;
 
     #[test]
     fn test_add_unverified_and_verified() {
@@ -283,5 +284,16 @@ mod tests {
         let result = storage.get_nearest_nodes(&seeking_id, None);
         assert_eq!(1, result.len());
         assert_eq!(closer_id, result[0].id);
+    }
+
+    #[test]
+    fn test_empty_prune() {
+        let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
+        let mut storage = NodeBucketStorage::new(our_id, 1);
+        let earlier = Instant::now()
+            .checked_sub(Duration::from_secs(600))
+            .unwrap();
+
+        storage.prune(&earlier, &earlier);
     }
 }
