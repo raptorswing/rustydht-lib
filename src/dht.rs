@@ -1,3 +1,4 @@
+use rand::prelude::SliceRandom;
 use rand::{thread_rng, Rng};
 
 use smol::lock::Mutex;
@@ -7,6 +8,7 @@ extern crate crc;
 use crc::{crc32, Hasher32};
 
 use std::cell::RefCell;
+use std::convert::TryInto;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::{Duration, Instant};
 
@@ -365,43 +367,48 @@ impl DHT {
                         }
                     }
 
-                    // super::packets::KRPCRequestSpecific::KRPCSampleInfoHashesRequest {
-                    //     arguments,
-                    // } => {
-                    //     let target = MainlineId::from_bytes(&arguments.target)?;
+                    packets::RequestSpecific::SampleInfoHashesRequest(arguments) => {
+                        let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
+                        let mut buckets = self.buckets.lock().await;
+                        if is_id_valid {
+                            buckets.add_or_update(Node::new(arguments.requester_id, addr), false);
+                        }
 
-                    //     let id = MainlineId::from_bytes(&arguments.id)?;
-                    //     let is_id_valid = id.is_valid_for_ip(&addr.ip());
-                    //     let mut buckets = self.buckets.lock().await;
-                    //     if is_id_valid {
-                    //         buckets.add_or_update(Node::new(id, addr), false);
-                    //     }
+                        let nearest = buckets
+                            .get_nearest_nodes(&arguments.target, Some(&arguments.requester_id))
+                            .iter()
+                            .map(|&n_ref| n_ref.clone())
+                            .collect();
 
-                    //     let nearest = buckets.get_nearest_nodes(&target, Some(&id));
-                    //     let info_hashes = {
-                    //         let mut rng = thread_rng();
-                    //         let peer_storage = self.peer_storage.lock().await;
-                    //         peer_storage
-                    //             .get_info_hashes()
-                    //             .as_mut_slice()
-                    //             .partial_shuffle(&mut rng, MAX_SAMPLE_RESPONSE)
-                    //             .0
-                    //             .to_vec()
-                    //     };
-                    //     let reply = super::packets::create_sample_infohashes_response(
-                    //         &self.our_id.borrow(),
-                    //         msg.transaction_id,
-                    //         &addr,
-                    //         MIN_SAMPLE_INTERVAL_SECS,
-                    //         &nearest,
-                    //         &info_hashes,
-                    //     );
-                    //     let reply_bytes = serde_bencode::to_bytes(&reply)
-                    //         .expect("Failed to serialize sample_infohashes response");
-                    //     send_to!(self.socket, &reply_bytes, addr);
-                    // }
-                    _ => {
-                        eprintln!("Received unimplemented request type");
+                        let (info_hashes, total_info_hashes) = {
+                            let peer_storage = self.peer_storage.lock().await;
+                            let info_hashes = peer_storage.get_info_hashes();
+                            let total_info_hashes = info_hashes.len();
+                            let info_hashes = {
+                                let mut rng = thread_rng();
+                                peer_storage
+                                    .get_info_hashes()
+                                    .as_mut_slice()
+                                    .partial_shuffle(&mut rng, self.settings.max_sample_response)
+                                    .0
+                                    .to_vec()
+                            };
+                            (info_hashes, total_info_hashes)
+                        };
+
+                        let reply = packets::Message::create_sample_infohashes_response(
+                            *self.our_id.borrow(),
+                            msg.transaction_id,
+                            addr,
+                            Duration::from_secs(
+                                self.settings.min_sample_interval_secs.try_into().unwrap(),
+                            ),
+                            nearest,
+                            info_hashes,
+                            total_info_hashes,
+                        );
+                        let reply_bytes = reply.to_bytes()?;
+                        self.send_to(&reply_bytes, addr).await?;
                     }
                 }
             }
@@ -616,6 +623,30 @@ mod test {
                 packets::MessageType::Response(packets::ResponseSpecific::PingResponse(
                     packets::PingResponseArguments { .. }
                 ))
+            ));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_responds_to_sample_infohashes() -> Result<(), RustyDHTError> {
+        let requester_id = Id::from_random(&mut thread_rng());
+        let target = Id::from_random(&mut thread_rng());
+        smol::block_on(async {
+            let request = packets::Message::create_sample_infohashes_request(requester_id, target);
+
+            let res = futures::try_join!(accept_single_packet(), send_and_receive(request.clone()))
+                .map(|res| res.1)?;
+
+            assert_eq!(res.transaction_id, request.transaction_id);
+            assert!(matches!(
+                res.message_type,
+                packets::MessageType::Response(
+                    packets::ResponseSpecific::SampleInfoHashesResponse(
+                        packets::SampleInfoHashesResponseArguments { num: 0, .. }
+                    )
+                )
             ));
 
             Ok(())

@@ -10,6 +10,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use rand::prelude::*;
 
+use std::time::Duration;
+
 const MAX_SCRAPE_INTERVAL: u64 = 21600; // 6 hours
 
 #[derive(Debug, PartialEq, Clone)]
@@ -79,8 +81,8 @@ pub struct GetPeersRequestArguments {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct SampleInfoHashesRequestArguments {
-    target: Id,
-    requester_id: Id,
+    pub target: Id,
+    pub requester_id: Id,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -118,11 +120,11 @@ pub struct GetPeersResponseArguments {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct SampleInfoHashesResponseArguments {
-    responder_id: Id,
-    interval: std::time::Duration,
-    nodes: Vec<Node>,
-    samples: Vec<Id>,
-    num: i32,
+    pub responder_id: Id,
+    pub interval: Duration,
+    pub nodes: Vec<Node>,
+    pub samples: Vec<Id>,
+    pub num: i32,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -356,7 +358,7 @@ impl Message {
                         } => ResponseSpecific::SampleInfoHashesResponse(
                             SampleInfoHashesResponseArguments {
                                 responder_id: Id::from_bytes(&arguments.id)?,
-                                interval: std::time::Duration::from_secs(arguments.interval as u64),
+                                interval: Duration::from_secs(arguments.interval as u64),
                                 num: arguments.num,
                                 nodes: bytes_to_nodes4(&arguments.nodes)?,
                                 samples: {
@@ -538,6 +540,46 @@ impl Message {
                     port: port,
                     info_hash: info_hash,
                     token: token,
+                },
+            )),
+        }
+    }
+
+    pub fn create_sample_infohashes_request(requester_id: Id, target: Id) -> Message {
+        let mut rng = thread_rng();
+        Message {
+            transaction_id: vec![rng.gen(), rng.gen()],
+            version: None,
+            requester_ip: None,
+            message_type: MessageType::Request(RequestSpecific::SampleInfoHashesRequest(
+                SampleInfoHashesRequestArguments {
+                    requester_id: requester_id,
+                    target: target,
+                },
+            )),
+        }
+    }
+
+    pub fn create_sample_infohashes_response(
+        responder_id: Id,
+        transaction_id: Vec<u8>,
+        requester_ip: SocketAddr,
+        interval: Duration,
+        nodes: Vec<Node>,
+        samples: Vec<Id>,
+        num: usize,
+    ) -> Message {
+        Message {
+            transaction_id: transaction_id,
+            version: None,
+            requester_ip: Some(requester_ip),
+            message_type: MessageType::Response(ResponseSpecific::SampleInfoHashesResponse(
+                SampleInfoHashesResponseArguments {
+                    responder_id: responder_id,
+                    interval: interval,
+                    nodes: nodes,
+                    samples: samples,
+                    num: num.try_into().unwrap(),
                 },
             )),
         }
@@ -858,7 +900,7 @@ mod tests {
             message_type: MessageType::Response(ResponseSpecific::SampleInfoHashesResponse(
                 SampleInfoHashesResponseArguments {
                     responder_id: Id::from_hex("0505050505050505050505050505050505050505").unwrap(),
-                    interval: std::time::Duration::from_secs(32),
+                    interval: Duration::from_secs(32),
                     nodes: vec![Node::new(
                         Id::from_hex("0606060606060606060606060606060606060606").unwrap(),
                         "49.50.52.52:5354".parse().unwrap(),
