@@ -17,7 +17,7 @@ use crate::common::{Id, Node};
 use crate::errors::RustyDHTError;
 use crate::packets;
 use crate::storage::node_bucket_storage::NodeStorage;
-use crate::storage::outbound_request_storage::OutboundRequestStorage;
+use crate::storage::outbound_request_storage::{OutboundRequestStorage, RequestInfo};
 use crate::storage::peer_storage::PeerStorage;
 use crate::storage::throttler::Throttler;
 
@@ -415,32 +415,32 @@ impl DHT {
 
             packets::MessageType::Response(response_variant) => {
                 match response_variant {
-                    // super::packets::KRPCResponseSpecific::KRPCPingResponse { arguments } => {
-                    //     let id = MainlineId::from_bytes(&arguments.id)?;
+                    packets::ResponseSpecific::PingResponse(arguments) => {
+                        let is_id_valid = arguments.responder_id.is_valid_for_ip(&addr.ip());
+                        if !is_id_valid {
+                            return Ok(());
+                        }
 
-                    //     let is_id_valid = id.is_valid_for_ip(&addr.ip());
-                    //     if !is_id_valid {
-                    //         return Ok(());
-                    //     }
+                        if let IpAddr::V4(their_ip) = addr.ip() {
+                            if let Some(they_claim_our_sockaddr) = &msg.requester_ip {
+                                if let SocketAddr::V4(they_claim_our_sockaddr) =
+                                    they_claim_our_sockaddr
+                                {
+                                    self.ip4_source
+                                        .lock()
+                                        .await
+                                        .add_vote(their_ip, they_claim_our_sockaddr.ip().clone());
+                                }
+                            }
+                        }
 
-                    //     if let IpAddr::V4(their_ip) = addr.ip() {
-                    //         if let Some(they_claim_our_sockaddr) = &msg.ip {
-                    //             let they_claim_our_sockaddr =
-                    //                 super::packets::bytes_to_sockaddrv4(they_claim_our_sockaddr)?;
-                    //             self.ip4_source
-                    //                 .lock()
-                    //                 .await
-                    //                 .add_vote(their_ip, they_claim_our_sockaddr.ip().clone());
-                    //         }
-                    //     }
+                        let mut buckets = self.buckets.lock().await;
+                        let mut request_storage = self.request_storage.lock().await;
 
-                    //     let mut buckets = self.buckets.lock().await;
-                    //     let mut request_storage = self.request_storage.lock().await;
-
-                    //     if request_storage.take_matching_request_info(&msg).is_some() {
-                    //         buckets.add_or_update(Node::new(id, addr), true);
-                    //     }
-                    // }
+                        if request_storage.take_matching_request_info(&msg).is_some() {
+                            buckets.add_or_update(Node::new(arguments.responder_id, addr), true);
+                        }
+                    }
 
                     // super::packets::KRPCResponseSpecific::KRPCFindNodeResponse { arguments } => {
                     //     let their_id = MainlineId::from_bytes(&arguments.id)?;
@@ -653,6 +653,67 @@ mod test {
         })
     }
 
+    #[test]
+    fn test_handles_ping_response() -> Result<(), RustyDHTError> {
+        smol::block_on(async {
+            let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
+            let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
+            let buckets = |id| -> Box<dyn NodeStorage> {
+                Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
+                    id, 8,
+                ))
+            };
+            let _lock = LOCK.lock();
+            let dht = DHT::new(
+                Some(get_dht_id()),
+                10001,
+                phony_ip4,
+                buckets,
+                &[],
+                DHTSettings::default(),
+            )
+            .unwrap();
+
+            let server_id = dht.our_id.borrow().clone();
+
+            let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let client_addr = client_socket.local_addr().unwrap();
+            let client_id = Id::from_random(&mut thread_rng());
+            let req = packets::Message::create_ping_request(server_id);
+            {
+                let mut request_storage = dht.request_storage.lock().await;
+                request_storage.add_request(RequestInfo::new(client_addr, None, req.clone()));
+            }
+
+            let res = packets::Message::create_ping_response(
+                client_id,
+                req.transaction_id,
+                "127.0.0.1:10001".parse().unwrap(),
+            );
+
+            let mut throttler = crate::storage::throttler::Throttler::new(
+                100,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            );
+            let mut recv_buf = [0; 2048];
+
+            futures::try_join!(
+                dht.accept_single_packet(&mut throttler, &mut recv_buf),
+                send_only(res)
+            )?;
+
+            let num_verified = {
+                let buckets = dht.buckets.lock().await;
+                let verified = buckets.get_all_verified();
+                verified.len()
+            };
+            assert_eq!(num_verified, 1);
+
+            Ok(())
+        })
+    }
+
     // Dumb helper function because we can't declare a const or static Id
     fn get_dht_id() -> Id {
         Id::from_hex("0011223344556677889900112233445566778899").unwrap()
@@ -732,5 +793,13 @@ mod test {
         let mut recv_buf = [0; 2048];
         let num_read = sock.recv_from(&mut recv_buf).await.unwrap().0;
         packets::Message::from_bytes(&recv_buf[..num_read])
+    }
+
+    async fn send_only(msg: packets::Message) -> Result<(), RustyDHTError> {
+        let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        sock.send_to(&msg.clone().to_bytes().unwrap(), "127.0.0.1:10001")
+            .await
+            .unwrap();
+        Ok(())
     }
 }

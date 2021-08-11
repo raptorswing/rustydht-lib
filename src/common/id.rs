@@ -67,6 +67,9 @@ impl Id {
 
     pub fn is_valid_for_ip(&self, ip: &IpAddr) -> bool {
         // TODO return true if ip is not globally routable
+        if ip.is_loopback() {
+            return true;
+        }
         let expected = IdPrefixMagic::from_ip(ip, self.bytes[ID_SIZE - 1]);
         let actual = IdPrefixMagic::from_id(&self);
 
