@@ -10,6 +10,8 @@ pub trait NodeStorage {
     fn clear(&mut self);
 
     fn count_buckets(&self) -> usize;
+
+    /// Returns a tuple of (unverified, verified)
     fn count(&self) -> (usize, usize);
 
     fn get_all_unverified(&self) -> Vec<&NodeWrapper>;
@@ -296,5 +298,23 @@ mod tests {
 
         let period = Duration::from_secs(600);
         storage.prune(period, period);
+    }
+
+    #[test]
+    fn test_clear() {
+        let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
+        let mut storage = NodeBucketStorage::new(our_id, 1);
+
+        storage.add_or_update(
+            Node::new(
+                Id::from_hex("7fffffffffffffffffffffffffffffffffffffff").unwrap(),
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
+            ),
+            true,
+        );
+        assert_eq!(storage.count().1, 1);
+
+        storage.clear();
+        assert_eq!(storage.count().1, 0);
     }
 }
