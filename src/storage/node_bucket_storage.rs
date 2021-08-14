@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::common::{Id, Node};
 
@@ -6,12 +6,12 @@ use super::buckets::Buckets;
 use super::node_wrapper::NodeWrapper;
 
 pub trait NodeStorage {
-    fn new(our_id: Id, k: usize) -> Self;
-
     fn add_or_update(&mut self, node: Node, verified: bool);
     fn clear(&mut self);
 
     fn count_buckets(&self) -> usize;
+
+    /// Returns a tuple of (unverified, verified)
     fn count(&self) -> (usize, usize);
 
     fn get_all_unverified(&self) -> Vec<&NodeWrapper>;
@@ -19,7 +19,9 @@ pub trait NodeStorage {
     fn get_nearest_nodes(&self, id: &Id, exclude: Option<&Id>) -> Vec<&Node>;
 
     /// Prunes verified to unverified. Prunes unverified to death.
-    fn prune(&mut self, time: &Instant, unverified_time: &Instant);
+    /// In limited cases pruning may not occur as soon as it can due to overflow issues with the monotonic clock.
+    /// So the grace_periods are really minimum durations that an entry will go before being pruned.
+    fn prune(&mut self, grace_period: Duration, unverified_grace_period: Duration);
     fn set_id(&mut self, our_id: Id);
 }
 
@@ -29,6 +31,12 @@ pub struct NodeBucketStorage {
 }
 
 impl NodeBucketStorage {
+    pub fn new(our_id: Id, k: usize) -> NodeBucketStorage {
+        NodeBucketStorage {
+            verified: Buckets::new(our_id, k),
+            unverified: Buckets::new(our_id, k),
+        }
+    }
     fn add_or_update_last_seen(&mut self, node: Node) {
         if let Some(existing) = self.verified.get_mut(&node.id) {
             eprintln!("Updating existing verified {:?} last seen", node);
@@ -85,13 +93,6 @@ impl NodeBucketStorage {
 }
 
 impl NodeStorage for NodeBucketStorage {
-    fn new(our_id: Id, k: usize) -> NodeBucketStorage {
-        NodeBucketStorage {
-            verified: Buckets::new(our_id, k),
-            unverified: Buckets::new(our_id, k),
-        }
-    }
-
     fn add_or_update(&mut self, node: Node, verified: bool) {
         if verified {
             self.add_or_update_verified(node);
@@ -129,29 +130,30 @@ impl NodeStorage for NodeBucketStorage {
             .collect()
     }
 
-    fn prune(&mut self, time: &Instant, unverified_time: &Instant) {
-        self.verified.retain(|nw| {
-            if let Some(last_verified) = nw.last_verified {
-                return last_verified >= *time;
+    fn prune(&mut self, grace_period: Duration, unverified_grace_period: Duration) {
+        if let Some(time) = Instant::now().checked_sub(grace_period) {
+            if let Some(unverified_time) = Instant::now().checked_sub(unverified_grace_period) {
+                self.verified.retain(|nw| {
+                    if let Some(last_verified) = nw.last_verified {
+                        return last_verified >= time;
+                    }
+                    eprintln!("Verified {:?} hasn't verified recently. Removing.", nw.node);
+                    return false;
+                });
+                self.unverified.retain(|nw| {
+                    if let Some(last_verified) = nw.last_verified {
+                        if last_verified >= time {
+                            return true;
+                        }
+                    }
+                    if nw.last_seen >= time && nw.last_seen >= unverified_time {
+                        return true;
+                    }
+                    eprintln!("Unverified {:?} is dead. Removing", nw.node);
+                    return false;
+                });
             }
-            eprintln!("Verified {:?} hasn't verified recently. Removing.", nw.node);
-            return false;
-        });
-
-        self.unverified.retain(|nw| {
-            if let Some(last_verified) = nw.last_verified {
-                if last_verified >= *time {
-                    return true;
-                }
-            }
-
-            if nw.last_seen >= *time && nw.last_seen >= *unverified_time {
-                return true;
-            }
-
-            eprintln!("Unverified {:?} is dead. Removing", nw.node);
-            return false;
-        });
+        }
     }
 
     fn set_id(&mut self, new_id: Id) {
@@ -164,6 +166,7 @@ impl NodeStorage for NodeBucketStorage {
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::time::Duration;
 
     #[test]
     fn test_add_unverified_and_verified() {
@@ -240,12 +243,22 @@ mod tests {
 
         // Mark it verified again
         let before_update = std::time::Instant::now();
-        storage.add_or_update(node1, true);
+        storage.add_or_update(node1.clone(), true);
 
         let wrapper = storage.get_all_verified()[0];
 
         // verify last_verified and last_seen updated again
-        assert!(wrapper.last_verified.unwrap() > before_update);
+        assert!(wrapper.last_verified.unwrap() >= before_update);
+        assert!(wrapper.last_seen >= before_update);
+
+        // Mark it seen (not verified)
+        let before_update = std::time::Instant::now();
+        storage.add_or_update(node1, false);
+
+        let wrapper = storage.get_all_verified()[0];
+
+        // It should still be verified but last_seen should be updated
+        assert!(wrapper.last_verified.unwrap() <= before_update);
         assert!(wrapper.last_seen >= before_update);
     }
 
@@ -276,5 +289,32 @@ mod tests {
         let result = storage.get_nearest_nodes(&seeking_id, None);
         assert_eq!(1, result.len());
         assert_eq!(closer_id, result[0].id);
+    }
+
+    #[test]
+    fn test_empty_prune() {
+        let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
+        let mut storage = NodeBucketStorage::new(our_id, 1);
+
+        let period = Duration::from_secs(600);
+        storage.prune(period, period);
+    }
+
+    #[test]
+    fn test_clear() {
+        let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
+        let mut storage = NodeBucketStorage::new(our_id, 1);
+
+        storage.add_or_update(
+            Node::new(
+                Id::from_hex("7fffffffffffffffffffffffffffffffffffffff").unwrap(),
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
+            ),
+            true,
+        );
+        assert_eq!(storage.count().1, 1);
+
+        storage.clear();
+        assert_eq!(storage.count().1, 0);
     }
 }

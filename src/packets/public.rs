@@ -1,4 +1,4 @@
-use crate::common::{Id, Node, ID_SIZE};
+use crate::common::{Id, Node, TransactionId, ID_SIZE};
 use crate::errors;
 
 use super::internal;
@@ -9,6 +9,8 @@ use std::convert::TryInto;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use rand::prelude::*;
+
+use std::time::Duration;
 
 const MAX_SCRAPE_INTERVAL: u64 = 21600; // 6 hours
 
@@ -62,34 +64,34 @@ pub enum ResponseSpecific {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct PingRequestArguments {
-    requester_id: Id,
+    pub requester_id: Id,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct FindNodeRequestArguments {
-    target: Id,
-    requester_id: Id,
+    pub target: Id,
+    pub requester_id: Id,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct GetPeersRequestArguments {
-    info_hash: Id,
-    requester_id: Id,
+    pub info_hash: Id,
+    pub requester_id: Id,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct SampleInfoHashesRequestArguments {
-    target: Id,
-    requester_id: Id,
+    pub target: Id,
+    pub requester_id: Id,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct AnnouncePeerRequestArguments {
-    requester_id: Id,
-    info_hash: Id,
-    port: u16,
-    implied_port: Option<bool>,
-    token: Vec<u8>,
+    pub requester_id: Id,
+    pub info_hash: Id,
+    pub port: u16,
+    pub implied_port: Option<bool>,
+    pub token: Vec<u8>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -100,29 +102,29 @@ pub enum GetPeersResponseValues {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct PingResponseArguments {
-    responder_id: Id,
+    pub responder_id: Id,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct FindNodeResponseArguments {
-    responder_id: Id,
-    nodes: Vec<Node>,
+    pub responder_id: Id,
+    pub nodes: Vec<Node>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct GetPeersResponseArguments {
-    responder_id: Id,
-    token: Vec<u8>,
-    values: GetPeersResponseValues,
+    pub responder_id: Id,
+    pub token: Vec<u8>,
+    pub values: GetPeersResponseValues,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct SampleInfoHashesResponseArguments {
-    responder_id: Id,
-    interval: std::time::Duration,
-    nodes: Vec<Node>,
-    samples: Vec<Id>,
-    num: i32,
+    pub responder_id: Id,
+    pub interval: Duration,
+    pub nodes: Vec<Node>,
+    pub samples: Vec<Id>,
+    pub num: i32,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -356,7 +358,7 @@ impl Message {
                         } => ResponseSpecific::SampleInfoHashesResponse(
                             SampleInfoHashesResponseArguments {
                                 responder_id: Id::from_bytes(&arguments.id)?,
-                                interval: std::time::Duration::from_secs(arguments.interval as u64),
+                                interval: Duration::from_secs(arguments.interval as u64),
                                 num: arguments.num,
                                 nodes: bytes_to_nodes4(&arguments.nodes)?,
                                 samples: {
@@ -397,6 +399,191 @@ impl Message {
     pub fn from_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<Message, errors::RustyDHTError> {
         Message::from_serde_message(internal::DHTMessage::from_bytes(bytes)?)
     }
+
+    pub fn create_ping_request(requester_id: Id) -> Message {
+        let mut rng = thread_rng();
+        Message {
+            transaction_id: vec![rng.gen(), rng.gen()],
+            version: None,
+            requester_ip: None,
+            message_type: MessageType::Request(RequestSpecific::PingRequest(
+                PingRequestArguments {
+                    requester_id: requester_id,
+                },
+            )),
+        }
+    }
+    pub fn create_ping_response(
+        responder_id: Id,
+        transaction_id: Vec<u8>,
+        remote: SocketAddr,
+    ) -> Message {
+        Message {
+            transaction_id: transaction_id,
+            version: None,
+            requester_ip: Some(remote),
+            message_type: MessageType::Response(ResponseSpecific::PingResponse(
+                PingResponseArguments {
+                    responder_id: responder_id,
+                },
+            )),
+        }
+    }
+
+    pub fn create_get_peers_request(requester_id: Id, info_hash: Id) -> Message {
+        let mut rng = thread_rng();
+        Message {
+            transaction_id: vec![rng.gen(), rng.gen()],
+            version: None,
+            requester_ip: None,
+            message_type: MessageType::Request(RequestSpecific::GetPeersRequest(
+                GetPeersRequestArguments {
+                    requester_id: requester_id,
+                    info_hash: info_hash,
+                },
+            )),
+        }
+    }
+
+    pub fn create_get_peers_response_no_peers(
+        responder_id: Id,
+        transaction_id: Vec<u8>,
+        requester_ip: SocketAddr,
+        token: Vec<u8>,
+        nearest_nodes: Vec<Node>,
+    ) -> Message {
+        Message {
+            transaction_id: transaction_id,
+            version: None,
+            requester_ip: Some(requester_ip),
+            message_type: MessageType::Response(ResponseSpecific::GetPeersResponse(
+                GetPeersResponseArguments {
+                    responder_id: responder_id,
+                    token: token,
+                    values: GetPeersResponseValues::Nodes(nearest_nodes),
+                },
+            )),
+        }
+    }
+
+    pub fn create_get_peers_response_peers(
+        responder_id: Id,
+        transaction_id: Vec<u8>,
+        requester_ip: SocketAddr,
+        token: Vec<u8>,
+        peers: Vec<SocketAddr>,
+    ) -> Message {
+        Message {
+            transaction_id: transaction_id,
+            version: None,
+            requester_ip: Some(requester_ip),
+            message_type: MessageType::Response(ResponseSpecific::GetPeersResponse(
+                GetPeersResponseArguments {
+                    responder_id: responder_id,
+                    token: token,
+                    values: GetPeersResponseValues::Peers(peers),
+                },
+            )),
+        }
+    }
+
+    pub fn create_find_node_request(requester_id: Id, target: Id) -> Message {
+        let mut rng = thread_rng();
+        Message {
+            transaction_id: vec![rng.gen(), rng.gen()],
+            version: None,
+            requester_ip: None,
+            message_type: MessageType::Request(RequestSpecific::FindNodeRequest(
+                FindNodeRequestArguments {
+                    requester_id: requester_id,
+                    target: target,
+                },
+            )),
+        }
+    }
+
+    pub fn create_find_node_response(
+        responder_id: Id,
+        transaction_id: Vec<u8>,
+        requester_ip: SocketAddr,
+        nodes: Vec<Node>,
+    ) -> Message {
+        Message {
+            transaction_id: transaction_id,
+            version: None,
+            requester_ip: Some(requester_ip),
+            message_type: MessageType::Response(ResponseSpecific::FindNodeResponse(
+                FindNodeResponseArguments {
+                    responder_id: responder_id,
+                    nodes: nodes,
+                },
+            )),
+        }
+    }
+
+    pub fn create_announce_peer_request(
+        requester_id: Id,
+        info_hash: Id,
+        port: u16,
+        implied_port: bool,
+        token: Vec<u8>,
+    ) -> Message {
+        let mut rng = thread_rng();
+        Message {
+            transaction_id: vec![rng.gen(), rng.gen()],
+            version: None,
+            requester_ip: None,
+            message_type: MessageType::Request(RequestSpecific::AnnouncePeerRequest(
+                AnnouncePeerRequestArguments {
+                    requester_id: requester_id,
+                    implied_port: Some(implied_port),
+                    port: port,
+                    info_hash: info_hash,
+                    token: token,
+                },
+            )),
+        }
+    }
+
+    pub fn create_sample_infohashes_request(requester_id: Id, target: Id) -> Message {
+        let mut rng = thread_rng();
+        Message {
+            transaction_id: vec![rng.gen(), rng.gen()],
+            version: None,
+            requester_ip: None,
+            message_type: MessageType::Request(RequestSpecific::SampleInfoHashesRequest(
+                SampleInfoHashesRequestArguments {
+                    requester_id: requester_id,
+                    target: target,
+                },
+            )),
+        }
+    }
+
+    pub fn create_sample_infohashes_response(
+        responder_id: Id,
+        transaction_id: Vec<u8>,
+        requester_ip: SocketAddr,
+        interval: Duration,
+        nodes: Vec<Node>,
+        samples: Vec<Id>,
+        num: usize,
+    ) -> Message {
+        Message {
+            transaction_id: transaction_id,
+            version: None,
+            requester_ip: Some(requester_ip),
+            message_type: MessageType::Response(ResponseSpecific::SampleInfoHashesResponse(
+                SampleInfoHashesResponseArguments {
+                    responder_id: responder_id,
+                    interval: interval,
+                    nodes: nodes,
+                    samples: samples,
+                    num: num.try_into().unwrap(),
+                },
+            )),
+        }
+    }
 }
 
 /// Returns true if the response and request types specified match.
@@ -423,35 +610,6 @@ pub fn response_matches_request(res: &ResponseSpecific, req: &RequestSpecific) -
         }
     }
     return false;
-}
-
-pub fn create_ping_request(requester_id: Id) -> Message {
-    let mut rng = thread_rng();
-    Message {
-        transaction_id: vec![rng.gen(), rng.gen()],
-        version: None,
-        requester_ip: None,
-        message_type: MessageType::Request(RequestSpecific::PingRequest(PingRequestArguments {
-            requester_id: requester_id,
-        })),
-    }
-}
-
-pub fn create_ping_response(
-    responder_id: Id,
-    transaction_id: Vec<u8>,
-    remote: SocketAddr,
-) -> Message {
-    Message {
-        transaction_id: transaction_id,
-        version: None,
-        requester_ip: Some(remote),
-        message_type: MessageType::Response(ResponseSpecific::PingResponse(
-            PingResponseArguments {
-                responder_id: responder_id,
-            },
-        )),
-    }
 }
 
 fn bytes_to_sockaddr<T: AsRef<[u8]>>(bytes: T) -> Result<SocketAddr, errors::RustyDHTError> {
@@ -482,7 +640,7 @@ fn bytes_to_sockaddr<T: AsRef<[u8]>>(bytes: T) -> Result<SocketAddr, errors::Rus
     }
 }
 
-fn sockaddr_to_bytes(sockaddr: &SocketAddr) -> Vec<u8> {
+pub fn sockaddr_to_bytes(sockaddr: &SocketAddr) -> Vec<u8> {
     let mut to_ret = Vec::new();
 
     match sockaddr {
@@ -742,7 +900,7 @@ mod tests {
             message_type: MessageType::Response(ResponseSpecific::SampleInfoHashesResponse(
                 SampleInfoHashesResponseArguments {
                     responder_id: Id::from_hex("0505050505050505050505050505050505050505").unwrap(),
-                    interval: std::time::Duration::from_secs(32),
+                    interval: Duration::from_secs(32),
                     nodes: vec![Node::new(
                         Id::from_hex("0606060606060606060606060606060606060606").unwrap(),
                         "49.50.52.52:5354".parse().unwrap(),
@@ -766,12 +924,12 @@ mod tests {
     #[test]
     fn test_response_matches_request_find_node() {
         let res = ResponseSpecific::FindNodeResponse(FindNodeResponseArguments {
-            nodes: vec!(),
-            responder_id: Id::from_random(&mut thread_rng())
+            nodes: vec![],
+            responder_id: Id::from_random(&mut thread_rng()),
         });
         let req = RequestSpecific::FindNodeRequest(FindNodeRequestArguments {
             requester_id: Id::from_random(&mut thread_rng()),
-            target: Id::from_random(&mut thread_rng())
+            target: Id::from_random(&mut thread_rng()),
         });
         assert_eq!(true, response_matches_request(&res, &req));
     }
@@ -779,7 +937,7 @@ mod tests {
     #[test]
     fn test_response_matches_request_find_ping() {
         let res = ResponseSpecific::PingResponse(PingResponseArguments {
-            responder_id: Id::from_random(&mut thread_rng())
+            responder_id: Id::from_random(&mut thread_rng()),
         });
         let req = RequestSpecific::PingRequest(PingRequestArguments {
             requester_id: Id::from_random(&mut thread_rng()),
@@ -790,11 +948,11 @@ mod tests {
     #[test]
     fn test_response_matches_request_find_nonmatching() {
         let res = ResponseSpecific::PingResponse(PingResponseArguments {
-            responder_id: Id::from_random(&mut thread_rng())
+            responder_id: Id::from_random(&mut thread_rng()),
         });
         let req = RequestSpecific::FindNodeRequest(FindNodeRequestArguments {
             requester_id: Id::from_random(&mut thread_rng()),
-            target: Id::from_random(&mut thread_rng())
+            target: Id::from_random(&mut thread_rng()),
         });
         assert_eq!(false, response_matches_request(&res, &req));
     }
