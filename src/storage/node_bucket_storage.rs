@@ -138,18 +138,15 @@ impl NodeStorage for NodeBucketStorage {
                     eprintln!("Verified {:?} hasn't verified recently. Removing.", nw.node);
                     return false;
                 });
-        
                 self.unverified.retain(|nw| {
                     if let Some(last_verified) = nw.last_verified {
                         if last_verified >= time {
                             return true;
                         }
                     }
-        
                     if nw.last_seen >= time && nw.last_seen >= unverified_time {
                         return true;
                     }
-        
                     eprintln!("Unverified {:?} is dead. Removing", nw.node);
                     return false;
                 });
@@ -249,7 +246,7 @@ mod tests {
         let wrapper = storage.get_all_verified()[0];
 
         // verify last_verified and last_seen updated again
-        assert!(wrapper.last_verified.unwrap() > before_update);
+        assert!(wrapper.last_verified.unwrap() >= before_update);
         assert!(wrapper.last_seen >= before_update);
 
         // Mark it seen (not verified)

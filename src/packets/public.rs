@@ -107,8 +107,8 @@ pub struct PingResponseArguments {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct FindNodeResponseArguments {
-    responder_id: Id,
-    nodes: Vec<Node>,
+    pub responder_id: Id,
+    pub nodes: Vec<Node>,
 }
 
 #[derive(Debug, PartialEq, Clone)]

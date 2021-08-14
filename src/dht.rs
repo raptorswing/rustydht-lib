@@ -17,7 +17,7 @@ use crate::common::{Id, Node};
 use crate::errors::RustyDHTError;
 use crate::packets;
 use crate::storage::node_bucket_storage::NodeStorage;
-use crate::storage::outbound_request_storage::{OutboundRequestStorage, RequestInfo};
+use crate::storage::outbound_request_storage::OutboundRequestStorage;
 use crate::storage::peer_storage::PeerStorage;
 use crate::storage::throttler::Throttler;
 
@@ -442,38 +442,37 @@ impl DHT {
                         }
                     }
 
-                    // super::packets::KRPCResponseSpecific::KRPCFindNodeResponse { arguments } => {
-                    //     let their_id = MainlineId::from_bytes(&arguments.id)?;
+                    packets::ResponseSpecific::FindNodeResponse(arguments) => {
+                        if let IpAddr::V4(their_ip) = addr.ip() {
+                            if let Some(they_claim_our_sockaddr) = &msg.requester_ip {
+                                if let SocketAddr::V4(they_claim_our_sockaddr) =
+                                    they_claim_our_sockaddr
+                                {
+                                    self.ip4_source
+                                        .lock()
+                                        .await
+                                        .add_vote(their_ip, they_claim_our_sockaddr.ip().clone());
+                                }
+                            }
+                        }
 
-                    //     if let IpAddr::V4(their_ip) = addr.ip() {
-                    //         if let Some(they_claim_our_sockaddr) = &msg.ip {
-                    //             let they_claim_our_sockaddr =
-                    //                 super::packets::bytes_to_sockaddrv4(they_claim_our_sockaddr)?;
-                    //             self.ip4_source
-                    //                 .lock()
-                    //                 .await
-                    //                 .add_vote(their_ip, they_claim_our_sockaddr.ip().clone());
-                    //         }
-                    //     }
+                        let mut buckets = self.buckets.lock().await;
+                        let mut request_storage = self.request_storage.lock().await;
 
-                    //     let mut buckets = self.buckets.lock().await;
-                    //     let mut request_storage = self.request_storage.lock().await;
+                        if request_storage.take_matching_request_info(&msg).is_some() {
+                            buckets.add_or_update(Node::new(arguments.responder_id, addr), true);
 
-                    //     if request_storage.take_matching_request_info(&msg).is_some() {
-                    //         buckets.add_or_update(Node::new(their_id, addr), true);
-
-                    //         // Add the nodes we got back as "seen" (even though we haven't necessarily seen them directly yet).
-                    //         // We'll ping them and try to verify them
-                    //         let nodes = super::packets::bytes_to_nodes(&arguments.nodes)?;
-                    //         for node in nodes {
-                    //             if node.id.is_valid_for_ip(&node.address.ip()) {
-                    //                 buckets.add_or_update(node, false);
-                    //             }
-                    //         }
-                    //     } else {
-                    //         eprintln!("Ignoring unsolicited find_node response");
-                    //     }
-                    // }
+                            // Add the nodes we got back as "seen" (even though we haven't necessarily seen them directly yet).
+                            // They will be pinged later in an attempt to verify them.
+                            for node in &arguments.nodes {
+                                if node.id.is_valid_for_ip(&node.address.ip()) {
+                                    buckets.add_or_update(node.clone(), false);
+                                }
+                            }
+                        } else {
+                            eprintln!("Ignoring unsolicited find_node response");
+                        }
+                    }
                     _ => {
                         eprintln!(
                             "Received unsupported/unexpected KRPCResponse variant from {:?}: {:?}",
@@ -527,6 +526,7 @@ fn calculate_token<T: AsRef<[u8]>>(remote: &SocketAddr, secret: T) -> [u8; 4] {
 mod test {
     use super::*;
     use crate::common::ipv4_addr_src::StaticIPV4AddrSource;
+    use crate::storage::outbound_request_storage::RequestInfo;
     use anyhow::anyhow;
     use lazy_static::lazy_static;
     use std::boxed::Box;
@@ -709,6 +709,75 @@ mod test {
                 verified.len()
             };
             assert_eq!(num_verified, 1);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_handles_find_node_response() -> Result<(), RustyDHTError> {
+        smol::block_on(async {
+            let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
+            let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
+            let buckets = |id| -> Box<dyn NodeStorage> {
+                Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
+                    id, 8,
+                ))
+            };
+            let _lock = LOCK.lock();
+            let dht = DHT::new(
+                Some(get_dht_id()),
+                10001,
+                phony_ip4,
+                buckets,
+                &[],
+                DHTSettings::default(),
+            )
+            .unwrap();
+
+            let server_id = dht.our_id.borrow().clone();
+
+            let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let client_addr = client_socket.local_addr().unwrap();
+            let client_id = Id::from_random(&mut thread_rng());
+            let req = packets::Message::create_find_node_request(
+                server_id,
+                Id::from_random(&mut thread_rng()),
+            );
+            {
+                let mut request_storage = dht.request_storage.lock().await;
+                request_storage.add_request(RequestInfo::new(client_addr, None, req.clone()));
+            }
+
+            let returned_node_id = Id::from_random(&mut thread_rng());
+            let res = packets::Message::create_find_node_response(
+                client_id,
+                req.transaction_id,
+                "127.0.0.1:10001".parse().unwrap(),
+                vec![Node::new(
+                    returned_node_id,
+                    "127.0.0.2:5050".parse().unwrap(),
+                )],
+            );
+
+            let mut throttler = crate::storage::throttler::Throttler::new(
+                100,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            );
+            let mut recv_buf = [0; 2048];
+
+            futures::try_join!(
+                dht.accept_single_packet(&mut throttler, &mut recv_buf),
+                send_only(res)
+            )?;
+
+            let buckets = dht.buckets.lock().await;
+            let verified = buckets.get_all_verified();
+            let unverified = buckets.get_all_unverified();
+            assert_eq!(verified.len(), 1);
+            assert_eq!(verified[0].node.id, client_id);
+            assert_eq!(unverified.len(), 1);
 
             Ok(())
         })
