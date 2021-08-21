@@ -2,7 +2,8 @@ use rand::prelude::SliceRandom;
 use rand::{thread_rng, Rng};
 
 use smol::lock::Mutex;
-use smol::net::UdpSocket;
+use smol::net::{resolve, UdpSocket};
+use smol::{prelude::*, Timer};
 
 extern crate crc;
 use crc::{crc32, Hasher32};
@@ -17,7 +18,7 @@ use crate::common::{Id, Node};
 use crate::errors::RustyDHTError;
 use crate::packets;
 use crate::storage::node_bucket_storage::NodeStorage;
-use crate::storage::outbound_request_storage::OutboundRequestStorage;
+use crate::storage::outbound_request_storage::{OutboundRequestStorage, RequestInfo};
 use crate::storage::peer_storage::PeerStorage;
 use crate::storage::throttler::Throttler;
 
@@ -62,6 +63,15 @@ pub struct DHTSettings {
 
     /// Max number of peers per torrent to store
     pub max_peers_per_torrent: usize,
+
+    /// We'll think about pinging and pruning nodes at this interval
+    pub ping_check_interval_secs: u64,
+
+    /// Outgoing requests may be pruned after this many seconds
+    pub outgoing_request_prune_secs: u64,
+
+    /// We'll think about pruning outgoing requests at this interval
+    pub outgoing_reqiest_check_interval_secs: u64,
 }
 
 impl DHTSettings {
@@ -81,6 +91,9 @@ impl DHTSettings {
             find_nodes_skip_count: 32,
             max_torrents: 50,
             max_peers_per_torrent: 100,
+            ping_check_interval_secs: 10,
+            outgoing_request_prune_secs: 30,
+            outgoing_reqiest_check_interval_secs: 30,
         }
     }
 }
@@ -491,8 +504,263 @@ impl DHT {
         return Ok(());
     }
 
+    /// Runs the main event loop of the DHT. Never returns!
+    pub async fn run_event_loop(&self) -> Result<(), RustyDHTError> {
+        if let Err(err) = futures::try_join!(
+            // One-time
+            self.ping_routers(),
+            // Loop indefinitely
+            self.accept_incoming_packets(),
+            self.periodic_router_ping(),
+            self.periodic_buddy_ping(),
+            self.periodic_request_prune(),
+            self.periodic_find_node(),
+            self.periodic_ip4_maintenance(),
+            self.periodic_token_rotation(),
+        ) {
+            return Err(err);
+        }
+
+        Ok(())
+    }
+
     pub fn get_id(&self) -> Id {
         self.our_id.borrow().clone()
+    }
+
+    async fn periodic_buddy_ping(&self) -> Result<(), RustyDHTError> {
+        loop {
+            Timer::after(Duration::from_secs(self.settings.ping_check_interval_secs)).await;
+            let mut buckets = self.buckets.lock().await;
+            let count = buckets.count();
+            eprintln!(
+                "PRUNING. Storage has {} unverified, {} verified in {} buckets",
+                count.0,
+                count.1,
+                buckets.count_buckets()
+            );
+            buckets.prune(
+                Duration::from_secs(self.settings.reverify_grace_period_secs),
+                Duration::from_secs(self.settings.verify_grace_period_secs),
+            );
+
+            match Instant::now()
+                .checked_sub(Duration::from_secs(self.settings.reverify_interval_secs))
+            {
+                None => {
+                    eprintln!("Monotonic clock underflow - skipping this round of pings");
+                }
+
+                Some(ping_if_older_than) => {
+                    eprintln!("PINGING");
+                    // Ping everybody we haven't verified
+                    for wrapper in buckets.get_all_unverified() {
+                        // Some things in here are actually verified... don't bother them too often
+                        if let Some(last_verified) = wrapper.last_verified {
+                            if last_verified >= ping_if_older_than {
+                                continue;
+                            }
+                            eprintln!("Sending ping to reverify backup {:?}", wrapper.node);
+                        } else {
+                            eprintln!(
+                                "Sending ping to verify {:?} (last seen {} seconds ago)",
+                                wrapper.node,
+                                (Instant::now() - wrapper.last_seen).as_secs()
+                            );
+                        }
+                        self.ping(wrapper.node.address).await?;
+                    }
+
+                    // Reverify those who haven't been verified recently
+                    for wrapper in buckets.get_all_verified() {
+                        if let Some(last_verified) = wrapper.last_verified {
+                            if last_verified >= ping_if_older_than {
+                                continue;
+                            }
+                        }
+                        eprintln!("Sending ping to reverify {:?}", wrapper.node);
+                        self.ping(wrapper.node.address).await?;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn periodic_find_node(&self) -> Result<(), RustyDHTError> {
+        loop {
+            Timer::after(Duration::from_secs(self.settings.find_nodes_interval_secs)).await;
+
+            {
+                let buckets = self.buckets.lock().await;
+                let (count_unverified, count_verified) = buckets.count();
+
+                // If we don't know anybody, force a router ping.
+                // This is helpful if we've been asleep for a while and lost all peers
+                if count_verified <= 0 {
+                    self.ping_routers().await?;
+                }
+
+                if count_unverified > self.settings.find_nodes_skip_count {
+                    eprintln!("Skipping find_node as we already have enough unverified");
+                    continue;
+                }
+            }
+
+            // Search a random node to get diversity
+            // let rando =  MainlineId::from_random();
+            let near_us = self.our_id.borrow().make_mutant();
+
+            // self.send_find_node(&rando).await?;
+            self.send_find_node(near_us).await?;
+        }
+    }
+
+    async fn periodic_ip4_maintenance(&self) -> Result<(), RustyDHTError> {
+        loop {
+            Timer::after(Duration::from_secs(10)).await;
+
+            let mut ip4_source = self.ip4_source.lock().await;
+            ip4_source.decay();
+
+            if let Some(ip) = ip4_source.get_best_ipv4() {
+                let ip = IpAddr::V4(ip);
+                if !self.our_id.borrow().is_valid_for_ip(&ip) {
+                    let new_id = Id::from_ip(&ip);
+                    eprintln!(
+                        "Our current id {} is not valid for IP {}. Using new id {}",
+                        self.our_id.borrow(),
+                        ip,
+                        new_id
+                    );
+                    self.our_id.replace(new_id);
+                    self.buckets.lock().await.set_id(new_id);
+                }
+            }
+        }
+    }
+
+    async fn periodic_request_prune(&self) -> Result<(), RustyDHTError> {
+        loop {
+            Timer::after(Duration::from_secs(
+                self.settings.outgoing_reqiest_check_interval_secs,
+            ))
+            .await;
+            let mut request_storage = self.request_storage.lock().await;
+            eprintln!(
+                "Time to prune request storage (size {})",
+                request_storage.len()
+            );
+            request_storage.prune_older_than(Duration::from_secs(
+                self.settings.outgoing_request_prune_secs,
+            ));
+        }
+    }
+
+    async fn periodic_router_ping(&self) -> Result<(), RustyDHTError> {
+        loop {
+            Timer::after(Duration::from_secs(self.settings.router_ping_interval_secs)).await;
+            eprintln!("I shall now ping the routers");
+            self.ping_routers().await?;
+        }
+    }
+
+    async fn periodic_token_rotation(&self) -> Result<(), RustyDHTError> {
+        loop {
+            Timer::after(Duration::from_secs(300)).await;
+            self.rotate_token_secrets();
+            eprintln!(
+                "Rotation token secret. New secret is {:?}, old secret is {:?}",
+                self.token_secret.borrow(),
+                self.old_token_secret.borrow()
+            );
+        }
+    }
+
+    async fn ping(&self, target: SocketAddr) -> Result<(), RustyDHTError> {
+        let req = packets::Message::create_ping_request(*self.our_id.borrow());
+        let req_bytes = req.clone().to_bytes()?;
+        self.request_storage
+            .lock()
+            .await
+            .add_request(RequestInfo::new(target, None, req));
+        self.send_to(&req_bytes, target).await?;
+        Ok(())
+    }
+
+    async fn ping_router<G: AsRef<str>>(&self, hostname: G) -> Result<(), RustyDHTError> {
+        let hostname = hostname.as_ref();
+        // Resolve and add to request storage
+        let resolve = resolve(hostname).await;
+        if let Err(err) = resolve {
+            // Used to only eat the specific errors corresponding to a failure to resolve,
+            // but they vary by platform and it's a pain. For now, we'll eat all host
+            // resolution errors.
+            eprintln!(
+                "Failed to resolve host {} due to error {:#?}. Try again later.",
+                hostname, err
+            );
+            return Ok(());
+            /*
+            if let Some(errno) = err.raw_os_error() {
+                // For windows
+                if errno == 11001 {
+                    eprintln!("Failed to resolve host {}. Try again later.", hostname);
+                    return Ok(());
+                }
+            }
+            return Err(err.into());
+            */
+        }
+
+        for socket_addr in resolve.unwrap() {
+            if socket_addr.is_ipv4() {
+                self.ping(socket_addr).await?;
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Pings some bittorrent routers
+    async fn ping_routers(&self) -> Result<(), RustyDHTError> {
+        let mut futures = futures::stream::FuturesUnordered::new();
+        for hostname in &self.routers {
+            futures.push(self.ping_router(hostname));
+        }
+        while let Some(result) = futures.next().await {
+            result?;
+        }
+        Ok(())
+    }
+
+    fn rotate_token_secrets(&self) {
+        let mut token_secret = Vec::with_capacity(self.settings.token_secret_size);
+        token_secret.fill_with(|| thread_rng().gen());
+
+        *self.old_token_secret.borrow_mut() = self.token_secret.take();
+        *self.token_secret.borrow_mut() = token_secret;
+    }
+
+    async fn send_find_node(&self, target_id: Id) -> Result<(), RustyDHTError> {
+        let buckets = self.buckets.lock().await;
+        let mut request_storage = self.request_storage.lock().await;
+
+        // Find the closest nodes to ask
+        let nearest = buckets.get_nearest_nodes(&target_id, None);
+        eprintln!(
+            "Sending find_node to {} nodes about {:?}",
+            nearest.len(),
+            target_id
+        );
+        for node in nearest {
+            let req = packets::Message::create_find_node_request(*self.our_id.borrow(), target_id);
+            let bytes = req.clone().to_bytes()?;
+
+            let request_info = RequestInfo::new(node.address, Some(node.id), req);
+            request_storage.add_request(request_info);
+            self.send_to(&bytes, node.address).await?;
+        }
+        Ok(())
     }
 
     async fn send_to(&self, bytes: &Vec<u8>, dest: SocketAddr) -> Result<(), RustyDHTError> {
@@ -526,7 +794,6 @@ fn calculate_token<T: AsRef<[u8]>>(remote: &SocketAddr, secret: T) -> [u8; 4] {
 mod test {
     use super::*;
     use crate::common::ipv4_addr_src::StaticIPV4AddrSource;
-    use crate::storage::outbound_request_storage::RequestInfo;
     use anyhow::anyhow;
     use lazy_static::lazy_static;
     use std::boxed::Box;

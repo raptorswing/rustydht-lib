@@ -3,6 +3,8 @@ use std::net::SocketAddr;
 use crate::common::{Id, TransactionId};
 use crate::packets::{Message, MessageType};
 
+use std::time::{Duration, Instant};
+
 pub struct OutboundRequestStorage {
     requests: std::collections::HashMap<TransactionId, RequestInfo>,
 }
@@ -57,10 +59,20 @@ impl OutboundRequestStorage {
         None
     }
 
-    pub fn prune_older_than(&mut self, time: &std::time::Instant) {
-        self.requests.retain(|_, v| -> bool {
-            return v.created_at >= *time;
-        });
+    pub fn prune_older_than(&mut self, duration: Duration) {
+        match Instant::now().checked_sub(duration) {
+            None => {
+                eprintln!(
+                    "Outbound request storage skipping pruning due to monotonic clock underflow"
+                );
+            }
+
+            Some(time) => {
+                self.requests.retain(|_, v| -> bool {
+                    return v.created_at >= time;
+                });
+            }
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -72,7 +84,7 @@ pub struct RequestInfo {
     addr: SocketAddr,
     id: Option<Id>,
     packet: Message,
-    created_at: std::time::Instant,
+    created_at: Instant,
 }
 
 impl RequestInfo {
@@ -81,7 +93,7 @@ impl RequestInfo {
             addr: addr,
             id: id,
             packet: packet,
-            created_at: std::time::Instant::now(),
+            created_at: Instant::now(),
         }
     }
 }
@@ -135,7 +147,7 @@ mod tests {
         let request_info = RequestInfo::new("127.0.0.1:1234".parse().unwrap(), None, req.clone());
         let mut request_info_2 =
             RequestInfo::new("127.0.0.1:1234".parse().unwrap(), None, req_2.clone());
-        request_info_2.created_at = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        request_info_2.created_at = Instant::now() + Duration::from_secs(10);
 
         // Add request to storage, make sure it's there
         storage.add_request(request_info);
@@ -143,7 +155,7 @@ mod tests {
         assert!(storage.has_request(&req.transaction_id));
 
         // Prune, make sure request isn't there
-        storage.prune_older_than(&(std::time::Instant::now() + std::time::Duration::from_secs(5)));
+        storage.prune_older_than(Duration::from_secs(0));
         assert!(!storage.has_request(&req.transaction_id));
         assert!(storage.has_request(&req_2.transaction_id));
     }

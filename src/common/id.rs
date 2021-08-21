@@ -112,6 +112,15 @@ impl Id {
 
         Id::from_bytes(&bytes).expect("Wrong number of bytes for id")
     }
+
+    /// Makes a new id that's similar to this one.
+    pub fn make_mutant(&self) -> Id {
+        let mut mutant = Id::from_random(&mut thread_rng());
+        for i in 0..4 {
+            mutant.bytes[i] = self.bytes[i];
+        }
+        mutant
+    }
 }
 
 impl std::fmt::Display for Id {
