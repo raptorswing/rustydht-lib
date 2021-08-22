@@ -1050,6 +1050,49 @@ mod test {
         })
     }
 
+    #[test]
+    fn test_event_loop_pings_routers() {
+        smol::block_on(async {
+            let router_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let router_addr = router_socket.local_addr().unwrap();
+
+            let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
+            let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
+            let buckets = |id| -> Box<dyn NodeStorage> {
+                Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
+                    id, 8,
+                ))
+            };
+            let mut settings = DHTSettings::default();
+            settings.router_ping_interval_secs = 1;
+            let _lock = LOCK.lock();
+            let dht = DHT::new(
+                Some(get_dht_id()),
+                10001,
+                phony_ip4,
+                buckets,
+                &[&router_addr.to_string()],
+                DHTSettings::default(),
+            )
+            .unwrap();
+
+            smol::future::race(dht.run_event_loop(), async {
+                let mut recv_buf = [0; 2048];
+                let num_read = router_socket.recv_from(&mut recv_buf).await.unwrap().0;
+                let msg = packets::Message::from_bytes(&recv_buf[..num_read]).unwrap();
+                assert!(matches!(
+                    msg.message_type,
+                    packets::MessageType::Request(packets::RequestSpecific::PingRequest(
+                        packets::PingRequestArguments { .. }
+                    ))
+                ));
+                Ok(())
+            })
+            .await
+            .expect("Got an error");
+        })
+    }
+
     // Dumb helper function because we can't declare a const or static Id
     fn get_dht_id() -> Id {
         Id::from_hex("0011223344556677889900112233445566778899").unwrap()
