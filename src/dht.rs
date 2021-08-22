@@ -1055,6 +1055,7 @@ mod test {
         smol::block_on(async {
             let router_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
             let router_addr = router_socket.local_addr().unwrap();
+            let router_id = Id::from_random(&mut thread_rng());
 
             let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
             let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
@@ -1078,7 +1079,7 @@ mod test {
 
             smol::future::race(dht.run_event_loop(), async {
                 let mut recv_buf = [0; 2048];
-                let num_read = router_socket.recv_from(&mut recv_buf).await.unwrap().0;
+                let (num_read, remote) = router_socket.recv_from(&mut recv_buf).await.unwrap();
                 let msg = packets::Message::from_bytes(&recv_buf[..num_read]).unwrap();
                 assert!(matches!(
                     msg.message_type,
@@ -1086,10 +1087,29 @@ mod test {
                         packets::PingRequestArguments { .. }
                     ))
                 ));
+
+                let res =
+                    packets::Message::create_ping_response(router_id, msg.transaction_id, remote);
+                router_socket
+                    .send_to(&res.to_bytes().unwrap(), remote)
+                    .await
+                    .expect("Failed to send_to");
+
+                // Send our own ping and await the response - this is used instead of a hacky timer to know when the DHT has processed our response
+                let req = packets::Message::create_ping_request(router_id);
+                router_socket
+                    .send_to(&req.to_bytes().unwrap(), remote)
+                    .await
+                    .expect("Failed to send_to");
+                router_socket.recv_from(&mut recv_buf).await.unwrap();
                 Ok(())
             })
             .await
             .expect("Got an error");
+
+            let (unverified, verified) = dht.buckets.lock().await.count();
+            assert_eq!(unverified, 0);
+            assert_eq!(verified, 1);
         })
     }
 
