@@ -157,8 +157,7 @@ impl DHT {
                 .map_err(|err| RustyDHTError::GeneralError(err.into()))?
         };
 
-        let mut token_secret = Vec::with_capacity(settings.token_secret_size);
-        token_secret.fill_with(|| thread_rng().gen());
+        let token_secret = make_token_secret(settings.token_secret_size);
 
         Ok(DHT {
             ip4_source: Mutex::new(ip4_source),
@@ -666,13 +665,8 @@ impl DHT {
 
     async fn periodic_token_rotation(&self) -> Result<(), RustyDHTError> {
         loop {
-            Timer::after(Duration::from_secs(300)).await;
+            Timer::after(Duration::from_secs(3)).await;
             self.rotate_token_secrets();
-            eprintln!(
-                "Rotation token secret. New secret is {:?}, old secret is {:?}",
-                self.token_secret.borrow(),
-                self.old_token_secret.borrow()
-            );
         }
     }
 
@@ -734,11 +728,15 @@ impl DHT {
     }
 
     fn rotate_token_secrets(&self) {
-        let mut token_secret = Vec::with_capacity(self.settings.token_secret_size);
-        token_secret.fill_with(|| thread_rng().gen());
+        let token_secret = make_token_secret(self.settings.token_secret_size);
 
         *self.old_token_secret.borrow_mut() = self.token_secret.take();
         *self.token_secret.borrow_mut() = token_secret;
+        eprintln!(
+            "Rotation token secret. New secret is {:?}, old secret is {:?}",
+            self.token_secret.borrow(),
+            self.old_token_secret.borrow()
+        );
     }
 
     async fn send_find_node(&self, target_id: Id) -> Result<(), RustyDHTError> {
@@ -788,6 +786,12 @@ fn calculate_token<T: AsRef<[u8]>>(remote: &SocketAddr, secret: T) -> [u8; 4] {
     let checksum: u32 = digest.sum32();
 
     return checksum.to_be_bytes();
+}
+
+fn make_token_secret(size: usize) -> Vec<u8> {
+    let mut token_secret = vec![0; size];
+    token_secret.fill_with(|| thread_rng().gen());
+    token_secret
 }
 
 #[cfg(test)]
@@ -1111,6 +1115,43 @@ mod test {
             assert_eq!(unverified, 0);
             assert_eq!(verified, 1);
         })
+    }
+
+    #[test]
+    fn test_token_secret_rotation() {
+        let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
+        let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
+        let buckets = |id| -> Box<dyn NodeStorage> {
+            Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
+                id, 8,
+            ))
+        };
+        let _lock = LOCK.lock();
+        let dht = DHT::new(
+            Some(get_dht_id()),
+            10001,
+            phony_ip4,
+            buckets,
+            &[],
+            DHTSettings::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            dht.token_secret.borrow().len(),
+            DHTSettings::default().token_secret_size
+        );
+
+        dht.rotate_token_secrets();
+        assert_eq!(
+            dht.old_token_secret.borrow().len(),
+            DHTSettings::default().token_secret_size
+        );
+        assert_eq!(
+            dht.token_secret.borrow().len(),
+            DHTSettings::default().token_secret_size
+        );
+        assert_ne!(*dht.old_token_secret.borrow(), *dht.token_secret.borrow());
     }
 
     // Dumb helper function because we can't declare a const or static Id
