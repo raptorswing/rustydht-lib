@@ -5,7 +5,7 @@ authors = ["raptorswing"]
 edition = "2018"
 description = "A library for interacting with BitTorrent's mainline DHT."
 license = "MIT"
-repository = "https://github.com/raptorswing/rustydht-lib.git"
+repository = "https://github.com/raptorswing/rustydht-lib"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
