@@ -665,7 +665,7 @@ impl DHT {
 
     async fn periodic_token_rotation(&self) -> Result<(), RustyDHTError> {
         loop {
-            Timer::after(Duration::from_secs(3)).await;
+            Timer::after(Duration::from_secs(300)).await;
             self.rotate_token_secrets();
         }
     }
