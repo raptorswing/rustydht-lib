@@ -432,46 +432,32 @@ impl DHT {
                         if !is_id_valid {
                             return Ok(());
                         }
+                        // Does this response correspond to a request we sent recently?
+                        let has_matching_request = {
+                            let mut request_storage = self.request_storage.lock().await;
+                            request_storage.take_matching_request_info(&msg).is_some()
+                        };
 
-                        if let IpAddr::V4(their_ip) = addr.ip() {
-                            if let Some(they_claim_our_sockaddr) = &msg.requester_ip {
-                                if let SocketAddr::V4(they_claim_our_sockaddr) =
-                                    they_claim_our_sockaddr
-                                {
-                                    self.ip4_source
-                                        .lock()
-                                        .await
-                                        .add_vote(their_ip, they_claim_our_sockaddr.ip().clone());
-                                }
-                            }
-                        }
-
-                        let mut buckets = self.buckets.lock().await;
-                        let mut request_storage = self.request_storage.lock().await;
-
-                        if request_storage.take_matching_request_info(&msg).is_some() {
+                        // If so, we'll take their vote on our IPv4 address and mark them as verified
+                        if has_matching_request {
+                            self.ip4_vote_helper(&addr, &msg).await;
+                            let mut buckets = self.buckets.lock().await;
                             buckets.add_or_update(Node::new(arguments.responder_id, addr), true);
                         }
                     }
 
                     packets::ResponseSpecific::FindNodeResponse(arguments) => {
-                        if let IpAddr::V4(their_ip) = addr.ip() {
-                            if let Some(they_claim_our_sockaddr) = &msg.requester_ip {
-                                if let SocketAddr::V4(they_claim_our_sockaddr) =
-                                    they_claim_our_sockaddr
-                                {
-                                    self.ip4_source
-                                        .lock()
-                                        .await
-                                        .add_vote(their_ip, they_claim_our_sockaddr.ip().clone());
-                                }
-                            }
-                        }
+                        // Does this response correspond to a request we sent recently?
+                        let has_matching_request = {
+                            let mut request_storage = self.request_storage.lock().await;
+                            request_storage.take_matching_request_info(&msg).is_some()
+                        };
 
-                        let mut buckets = self.buckets.lock().await;
-                        let mut request_storage = self.request_storage.lock().await;
+                        // If so, we'll take their vote on our IPv4 address, mark them as verified, and add the nodes they sent
+                        if has_matching_request {
+                            self.ip4_vote_helper(&addr, &msg).await;
 
-                        if request_storage.take_matching_request_info(&msg).is_some() {
+                            let mut buckets = self.buckets.lock().await;
                             buckets.add_or_update(Node::new(arguments.responder_id, addr), true);
 
                             // Add the nodes we got back as "seen" (even though we haven't necessarily seen them directly yet).
@@ -767,6 +753,20 @@ impl DHT {
             .await
             .map_err(|err| RustyDHTError::GeneralError(err.into()))?;
         Ok(())
+    }
+
+    /// Adds a 'vote' for whatever IP address the sender says we have.
+    async fn ip4_vote_helper(&self, addr: &SocketAddr, msg: &packets::Message) {
+        if let IpAddr::V4(their_ip) = addr.ip() {
+            if let Some(they_claim_our_sockaddr) = &msg.requester_ip {
+                if let SocketAddr::V4(they_claim_our_sockaddr) = they_claim_our_sockaddr {
+                    self.ip4_source
+                        .lock()
+                        .await
+                        .add_vote(their_ip, they_claim_our_sockaddr.ip().clone());
+                }
+            }
+        }
     }
 }
 
