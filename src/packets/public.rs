@@ -1,4 +1,4 @@
-use crate::common::{Id, Node, TransactionId, ID_SIZE};
+use crate::common::{Id, Node, ID_SIZE};
 use crate::errors;
 
 use super::internal;
@@ -128,7 +128,10 @@ pub struct SampleInfoHashesResponseArguments {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum ErrorSpecific {}
+pub struct ErrorSpecific {
+    code: i32,
+    description: String,
+}
 
 impl Message {
     fn to_serde_message(self) -> internal::DHTMessage {
@@ -258,7 +261,14 @@ impl Message {
                     }
                 }),
 
-                MessageType::Error(_) => panic!("Not implemented"),
+                MessageType::Error(err) => {
+                    internal::DHTMessageVariant::DHTError(internal::DHTErrorSpecific {
+                        error_info: vec![
+                            serde_bencode::value::Value::Int(err.code.into()),
+                            serde_bencode::value::Value::Bytes(err.description.into()),
+                        ],
+                    })
+                }
             },
         }
     }
@@ -387,7 +397,45 @@ impl Message {
                     })
                 }
 
-                internal::DHTMessageVariant::DHTError(_) => panic!("Not implemented"),
+                internal::DHTMessageVariant::DHTError(err) => {
+                    if err.error_info.len() < 2 {
+                        return Err(anyhow!("Error packet should have at least 2 elements").into());
+                    }
+                    MessageType::Error(ErrorSpecific {
+                        code: match err.error_info[0] {
+                            serde_bencode::value::Value::Int(code) => match code.try_into() {
+                                Ok(code) => code,
+                                Err(e) => {
+                                    return Err(errors::RustyDHTError::PacketParseError(
+                                        anyhow::Error::new(e),
+                                    ))
+                                }
+                            },
+                            _ => {
+                                return Err(errors::RustyDHTError::PacketParseError(anyhow!(
+                                    "Expected error code as first element"
+                                )))
+                            }
+                        },
+                        description: match &err.error_info[1] {
+                            serde_bencode::value::Value::Bytes(desc) => {
+                                match std::str::from_utf8(desc) {
+                                    Ok(desc) => desc.to_string(),
+                                    Err(e) => {
+                                        return Err(errors::RustyDHTError::PacketParseError(
+                                            anyhow::Error::new(e),
+                                        ))
+                                    }
+                                }
+                            }
+                            _ => {
+                                return Err(errors::RustyDHTError::PacketParseError(anyhow!(
+                                    "Expected description as second element"
+                                )))
+                            }
+                        },
+                    })
+                }
             },
         })
     }
@@ -916,6 +964,29 @@ mod tests {
 
         let serde_msg = original_msg.clone().to_serde_message();
         let bytes = serde_msg.to_bytes().unwrap();
+        let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
+        let parsed_msg = Message::from_serde_message(parsed_serde_msg).unwrap();
+        assert_eq!(parsed_msg, original_msg);
+    }
+
+    #[test]
+    fn test_error_response() {
+        let original_msg = Message {
+            transaction_id: vec![97, 97],
+            version: None,
+            requester_ip: None,
+            message_type: MessageType::Error(ErrorSpecific {
+                code: 201,
+                description: "A Generic Error Occured".to_string(),
+            }),
+        };
+
+        let serde_msg = original_msg.clone().to_serde_message();
+        let bytes = serde_msg.to_bytes().unwrap();
+        assert_eq!(
+            "d1:eli201e23:A Generic Error Occurede1:t2:aa1:y1:ee",
+            String::from_utf8_lossy(&bytes)
+        );
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
         let parsed_msg = Message::from_serde_message(parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);

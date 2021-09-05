@@ -107,7 +107,14 @@ pub enum DHTResponseSpecific {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct DHTErrorSpecific {
     #[serde(rename = "e")]
-    error_info: Vec<serde_bencode::value::Value>,
+    pub error_info: Vec<serde_bencode::value::Value>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum DHTErrorValue {
+    #[serde(rename = "")]
+    ErrorCode(i32),
+    ErrorDescription(String),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
