@@ -5,6 +5,8 @@ use crate::common::Id;
 
 use lru::LruCache;
 
+use log::debug;
+
 pub struct PeerInfo {
     addr: SocketAddr,
     last_updated: std::time::Instant,
@@ -46,7 +48,7 @@ impl PeerStorage {
                 peers.put(info_hash, swarm_lru);
             }
         }
-        eprintln!("{} is in swarm with info_hash {}", peer_addr, info_hash);
+        debug!(target: "PeerStorage", "{} is in swarm with info_hash {}", peer_addr, info_hash);
     }
 
     pub fn get_peers(

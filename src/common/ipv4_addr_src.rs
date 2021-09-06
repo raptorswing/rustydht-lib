@@ -1,6 +1,8 @@
 use std::convert::TryInto;
 use std::net::Ipv4Addr;
 
+use log::debug;
+
 pub trait IPV4AddrSource {
     /// Retrieves the IPv4 address that the source thinks we should have, or None if it can't make a determination.
     fn get_best_ipv4(&self) -> Option<Ipv4Addr>;
@@ -58,7 +60,7 @@ impl IPV4AddrSource for IPV4Consensus {
         let first = self.votes.first();
         match first {
             Some(vote_info) => {
-                eprintln!("First {:?} has {} votes", vote_info.ip, vote_info.votes);
+                debug!(target: "IPV4AddrSource", "Best IPv4 address {:?} has {} votes", vote_info.ip, vote_info.votes);
                 if vote_info.votes >= self.min_votes.try_into().unwrap() {
                     Some(vote_info.ip)
                 } else {

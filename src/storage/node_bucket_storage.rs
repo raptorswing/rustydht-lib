@@ -5,6 +5,8 @@ use crate::common::{Id, Node};
 use super::buckets::Buckets;
 use super::node_wrapper::NodeWrapper;
 
+use log::trace;
+
 pub trait NodeStorage {
     fn add_or_update(&mut self, node: Node, verified: bool);
     fn clear(&mut self);
@@ -37,15 +39,16 @@ impl NodeBucketStorage {
             unverified: Buckets::new(our_id, k),
         }
     }
+
     fn add_or_update_last_seen(&mut self, node: Node) {
         if let Some(existing) = self.verified.get_mut(&node.id) {
-            eprintln!("Updating existing verified {:?} last seen", node);
+            trace!(target:"NodeBucketStorage", "Updating existing verified {:?} last seen", node);
             existing.last_seen = std::time::Instant::now();
         } else if let Some(existing) = self.unverified.get_mut(&node.id) {
-            eprintln!("Updating existing unverified {:?} last seen", node);
+            trace!(target:"NodeBucketStorage", "Updating existing unverified {:?} last seen", node);
             existing.last_seen = std::time::Instant::now();
         } else {
-            eprintln!("Attempting to add unverified {:?}", node);
+            trace!(target:"NodeBucketStorage", "Attempting to add unverified {:?}", node);
             self.unverified.add(NodeWrapper::new(node), None);
         }
     }
@@ -57,7 +60,7 @@ impl NodeBucketStorage {
         // Remove it and try to add it to Verified.
         // If verified is full, add whatever overflows back to unverified (if it fits)
         if let Some(mut item) = self.unverified.remove(&node.id) {
-            eprintln!("Attempting to move {:?} from unverified to verified", node);
+            trace!(target:"NodeBucketStorage", "Attempting to move {:?} from unverified to verified", node);
             item.last_seen = now;
             item.last_verified = Some(now);
             let mut chump_list = Vec::with_capacity(1);
@@ -70,14 +73,14 @@ impl NodeBucketStorage {
         // Already exists in verified.
         // Update it
         else if let Some(wrapper) = self.verified.get_mut(&node.id) {
-            eprintln!("Marking verified {:?} as verified again", node);
+            trace!(target:"NodeBucketStorage", "Marking verified {:?} as verified again", node);
             wrapper.last_verified = Some(wrapper.last_seen);
             wrapper.last_seen = now;
             wrapper.last_verified = Some(now);
         }
         // Doesn't exist yet
         else {
-            eprintln!("Marking new {:?} as verified", node);
+            trace!(target:"NodeBucketStorage", "Marking new {:?} as verified", node);
             let mut wrapper = NodeWrapper::new(node);
             wrapper.last_seen = now;
             wrapper.last_verified = Some(now);
@@ -137,7 +140,7 @@ impl NodeStorage for NodeBucketStorage {
                     if let Some(last_verified) = nw.last_verified {
                         return last_verified >= time;
                     }
-                    eprintln!("Verified {:?} hasn't verified recently. Removing.", nw.node);
+                    trace!(target:"NodeBucketStorage", "Verified {:?} hasn't verified recently. Removing.", nw.node);
                     return false;
                 });
                 self.unverified.retain(|nw| {
@@ -149,7 +152,7 @@ impl NodeStorage for NodeBucketStorage {
                     if nw.last_seen >= time && nw.last_seen >= unverified_time {
                         return true;
                     }
-                    eprintln!("Unverified {:?} is dead. Removing", nw.node);
+                    trace!(target:"NodeBucketStorage", "Unverified {:?} is dead. Removing", nw.node);
                     return false;
                 });
             }

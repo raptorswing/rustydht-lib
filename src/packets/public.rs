@@ -3,6 +3,8 @@ use crate::errors;
 
 use super::internal;
 
+use log::warn;
+
 use anyhow::anyhow;
 
 use std::convert::TryInto;
@@ -651,8 +653,8 @@ pub fn response_matches_request(res: &ResponseSpecific, req: &RequestSpecific) -
         }
 
         _ => {
-            eprintln!(
-                "Unimplemented response type {:?} in response_matches_request",
+            warn!(target: "response_matches_request",
+                "Unimplemented response type {:?}",
                 res
             );
         }

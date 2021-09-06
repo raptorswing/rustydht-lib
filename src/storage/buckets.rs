@@ -139,7 +139,6 @@ impl<T: Bucketable> Buckets<T> {
         while bucket_index < self.buckets.len() {
             // Is the bucket over capacity?
             if self.buckets[bucket_index].len() > self.k {
-                // eprintln!("Bucket {} is over-capacity!", bucket_index);
                 // Is this the "deepest" bucket?
                 // If so, add a new one since we're over capacity
                 if bucket_index == self.buckets.len() - 1 {
@@ -149,11 +148,6 @@ impl<T: Bucketable> Buckets<T> {
                 // (Hopefully) move some nodes out of this bucket into the next one
                 for i in (0..self.buckets[bucket_index].len()).rev() {
                     let ideal_bucket_idx = self.get_dest_bucket_idx(&self.buckets[bucket_index][i]);
-                    // eprintln!(
-                    //     "Move {:?} to bucket {}",
-                    //     self.buckets[bucket_index][i].get_id(),
-                    //     ideal_bucket_idx
-                    // );
 
                     // This Node belongs in another bucket. Move it.
                     if ideal_bucket_idx != bucket_index {

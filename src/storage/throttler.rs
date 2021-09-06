@@ -1,6 +1,8 @@
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::{Duration, Instant};
 
+use log::debug;
+
 #[derive(Clone, Copy)]
 struct ThrottlerRecord {
     ip: IpAddr,
@@ -70,21 +72,18 @@ impl<const NUM_RECORDS: usize> Throttler<NUM_RECORDS> {
 
         if let Some(found) = found {
             if now < found.expiration {
-                eprintln!("Found match for {}", ip);
                 found.packets = found.packets + 1;
 
                 if found.packets > self.rate_limit {
-                    eprintln!("{} is throttled for {:?}", ip, self.naughty_timeout);
+                    debug!(target: "Throttler", "{} is throttled for {:?}. {} packets on record", ip, self.naughty_timeout, found.packets);
                     found.expiration = now + self.naughty_timeout;
                     return true;
                 }
             } else {
-                eprintln!("Found expired match for {}", ip);
                 found.packets = 1;
                 found.expiration = now + self.period;
             }
         } else if let Some(lamest) = lamest {
-            eprintln!("Creating new record for {}", ip);
             lamest.packets = 1;
             lamest.expiration = now + self.period;
             lamest.ip = ip;
