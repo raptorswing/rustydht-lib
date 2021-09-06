@@ -5,6 +5,8 @@ use crate::packets::{Message, MessageType};
 
 use std::time::{Duration, Instant};
 
+use log::debug;
+
 pub struct OutboundRequestStorage {
     requests: std::collections::HashMap<TransactionId, RequestInfo>,
 }
@@ -62,7 +64,7 @@ impl OutboundRequestStorage {
     pub fn prune_older_than(&mut self, duration: Duration) {
         match Instant::now().checked_sub(duration) {
             None => {
-                eprintln!(
+                debug!(target:"NodeBucketStorage",
                     "Outbound request storage skipping pruning due to monotonic clock underflow"
                 );
             }

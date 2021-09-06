@@ -5,6 +5,8 @@ use smol::lock::Mutex;
 use smol::net::{resolve, UdpSocket};
 use smol::{prelude::*, Timer};
 
+use log::{debug, info, trace, warn};
+
 extern crate crc;
 use crc::{crc32, Hasher32};
 
@@ -133,7 +135,7 @@ impl DHT {
                 None => match ip4_source.get_best_ipv4() {
                     Some(ip) => {
                         let id = Id::from_ip(&IpAddr::V4(ip));
-                        eprintln!(
+                        info!(target: "DHT",
                             "Our external IPv4 is {:?}. Generated id {} based on that",
                             ip, id
                         );
@@ -142,7 +144,7 @@ impl DHT {
 
                     None => {
                         let id = Id::from_random(&mut thread_rng());
-                        eprintln!("No external IPv4 provided. Using random id {} for now.", id);
+                        info!(target: "DHT", "No external IPv4 provided. Using random id {} for now.", id);
                         id
                     }
                 },
@@ -188,7 +190,7 @@ impl DHT {
 
                 Err(err) => match err {
                     RustyDHTError::PacketParseError(internal) => {
-                        eprintln!("{:?}", internal);
+                        warn!(target: "DHT", "{:?}", internal);
                         continue;
                     }
 
@@ -216,13 +218,14 @@ impl DHT {
             .map_err(|err| RustyDHTError::GeneralError(err.into()))?;
         let msg = packets::Message::from_bytes(&recv_buf[..num_read])?;
 
+        // Drop the packet if the IP has been throttled.
         if throttler.check_throttle(addr.ip(), None) {
-            eprintln!("{} is rate limited - dropping packet", addr.ip());
             return Ok(());
         }
 
+        // Filter out packets sent from port 0. We can't reply to these.
         if addr.port() == 0 {
-            eprintln!("{} has invalid port - dropping packet", addr);
+            warn!(target: "DHT", "{} has invalid port - dropping packet", addr);
             return Ok(());
         }
 
@@ -468,11 +471,11 @@ impl DHT {
                                 }
                             }
                         } else {
-                            eprintln!("Ignoring unsolicited find_node response");
+                            debug!(target: "DHT", "Ignoring unsolicited find_node response");
                         }
                     }
                     _ => {
-                        eprintln!(
+                        info!(target: "DHT",
                             "Received unsupported/unexpected KRPCResponse variant from {:?}: {:?}",
                             addr, response_variant
                         );
@@ -480,7 +483,7 @@ impl DHT {
                 }
             }
             _ => {
-                eprintln!(
+                warn!(target: "DHT",
                     "Received unsupported/unexpected KRPCMessage variant from {:?}: {:?}",
                     addr, msg
                 );
@@ -518,8 +521,8 @@ impl DHT {
             Timer::after(Duration::from_secs(self.settings.ping_check_interval_secs)).await;
             let mut buckets = self.buckets.lock().await;
             let count = buckets.count();
-            eprintln!(
-                "PRUNING. Storage has {} unverified, {} verified in {} buckets",
+            debug!(target: "DHT",
+                "Pruning node buckets. Storage has {} unverified, {} verified in {} buckets",
                 count.0,
                 count.1,
                 buckets.count_buckets()
@@ -533,11 +536,11 @@ impl DHT {
                 .checked_sub(Duration::from_secs(self.settings.reverify_interval_secs))
             {
                 None => {
-                    eprintln!("Monotonic clock underflow - skipping this round of pings");
+                    debug!(target: "DHT", "Monotonic clock underflow - skipping this round of pings");
                 }
 
                 Some(ping_if_older_than) => {
-                    eprintln!("PINGING");
+                    debug!(target: "DHT", "Sending pings to nodes");
                     // Ping everybody we haven't verified
                     for wrapper in buckets.get_all_unverified() {
                         // Some things in here are actually verified... don't bother them too often
@@ -545,9 +548,9 @@ impl DHT {
                             if last_verified >= ping_if_older_than {
                                 continue;
                             }
-                            eprintln!("Sending ping to reverify backup {:?}", wrapper.node);
+                            trace!(target: "DHT", "Sending ping to reverify backup {:?}", wrapper.node);
                         } else {
-                            eprintln!(
+                            trace!(target: "DHT",
                                 "Sending ping to verify {:?} (last seen {} seconds ago)",
                                 wrapper.node,
                                 (Instant::now() - wrapper.last_seen).as_secs()
@@ -563,7 +566,7 @@ impl DHT {
                                 continue;
                             }
                         }
-                        eprintln!("Sending ping to reverify {:?}", wrapper.node);
+                        trace!(target: "DHT", "Sending ping to reverify {:?}", wrapper.node);
                         self.ping(wrapper.node.address).await?;
                     }
                 }
@@ -586,7 +589,7 @@ impl DHT {
                 }
 
                 if count_unverified > self.settings.find_nodes_skip_count {
-                    eprintln!("Skipping find_node as we already have enough unverified");
+                    debug!(target: "DHT", "Skipping find_node as we already have enough unverified");
                     continue;
                 }
             }
@@ -611,7 +614,7 @@ impl DHT {
                 let ip = IpAddr::V4(ip);
                 if !self.our_id.borrow().is_valid_for_ip(&ip) {
                     let new_id = Id::from_ip(&ip);
-                    eprintln!(
+                    info!(target: "DHT",
                         "Our current id {} is not valid for IP {}. Using new id {}",
                         self.our_id.borrow(),
                         ip,
@@ -631,7 +634,7 @@ impl DHT {
             ))
             .await;
             let mut request_storage = self.request_storage.lock().await;
-            eprintln!(
+            debug!(target: "DHT",
                 "Time to prune request storage (size {})",
                 request_storage.len()
             );
@@ -644,7 +647,7 @@ impl DHT {
     async fn periodic_router_ping(&self) -> Result<(), RustyDHTError> {
         loop {
             Timer::after(Duration::from_secs(self.settings.router_ping_interval_secs)).await;
-            eprintln!("I shall now ping the routers");
+            debug!(target:"DHT", "Pinging routers");
             self.ping_routers().await?;
         }
     }
@@ -675,7 +678,8 @@ impl DHT {
             // Used to only eat the specific errors corresponding to a failure to resolve,
             // but they vary by platform and it's a pain. For now, we'll eat all host
             // resolution errors.
-            eprintln!(
+            warn!(
+                target: "DHT",
                 "Failed to resolve host {} due to error {:#?}. Try again later.",
                 hostname, err
             );
@@ -684,7 +688,7 @@ impl DHT {
             if let Some(errno) = err.raw_os_error() {
                 // For windows
                 if errno == 11001 {
-                    eprintln!("Failed to resolve host {}. Try again later.", hostname);
+                    warn!(target: "DHT", "Failed to resolve host {}. Try again later.", hostname);
                     return Ok(());
                 }
             }
@@ -718,8 +722,9 @@ impl DHT {
 
         *self.old_token_secret.borrow_mut() = self.token_secret.take();
         *self.token_secret.borrow_mut() = token_secret;
-        eprintln!(
-            "Rotation token secret. New secret is {:?}, old secret is {:?}",
+        debug!(
+            target: "DHT",
+            "Rotating token secret. New secret is {:?}, old secret is {:?}",
             self.token_secret.borrow(),
             self.old_token_secret.borrow()
         );
@@ -731,7 +736,8 @@ impl DHT {
 
         // Find the closest nodes to ask
         let nearest = buckets.get_nearest_nodes(&target_id, None);
-        eprintln!(
+        trace!(
+            target: "DHT",
             "Sending find_node to {} nodes about {:?}",
             nearest.len(),
             target_id
@@ -1166,7 +1172,6 @@ mod test {
     ) -> Result<packets::Message, RustyDHTError> {
         let req = packets::Message::create_get_peers_request(requester_id, info_hash);
         let res = send_and_receive(req).await?;
-        eprintln!("Got get_peers response");
 
         if let packets::MessageType::Response(packets::ResponseSpecific::GetPeersResponse(
             packets::GetPeersResponseArguments { token, .. },
