@@ -64,7 +64,7 @@ impl OutboundRequestStorage {
     pub fn prune_older_than(&mut self, duration: Duration) {
         match Instant::now().checked_sub(duration) {
             None => {
-                debug!(target:"NodeBucketStorage",
+                debug!(target: "rustydht_lib::NodeBucketStorage",
                     "Outbound request storage skipping pruning due to monotonic clock underflow"
                 );
             }
