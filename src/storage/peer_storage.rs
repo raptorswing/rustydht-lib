@@ -48,7 +48,7 @@ impl PeerStorage {
                 peers.put(info_hash, swarm_lru);
             }
         }
-        debug!(target: "PeerStorage", "{} is in swarm with info_hash {}", peer_addr, info_hash);
+        debug!(target: "rustydht_lib::PeerStorage", "{} is in swarm with info_hash {}", peer_addr, info_hash);
     }
 
     pub fn get_peers(

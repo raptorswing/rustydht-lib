@@ -135,7 +135,7 @@ impl DHT {
                 None => match ip4_source.get_best_ipv4() {
                     Some(ip) => {
                         let id = Id::from_ip(&IpAddr::V4(ip));
-                        info!(target: "DHT",
+                        info!(target: "rustydht_lib::DHT",
                             "Our external IPv4 is {:?}. Generated id {} based on that",
                             ip, id
                         );
@@ -144,7 +144,7 @@ impl DHT {
 
                     None => {
                         let id = Id::from_random(&mut thread_rng());
-                        info!(target: "DHT", "No external IPv4 provided. Using random id {} for now.", id);
+                        info!(target: "rustydht_lib::DHT", "No external IPv4 provided. Using random id {} for now.", id);
                         id
                     }
                 },
@@ -190,7 +190,7 @@ impl DHT {
 
                 Err(err) => match err {
                     RustyDHTError::PacketParseError(internal) => {
-                        warn!(target: "DHT", "{:?}", internal);
+                        warn!(target: "rustydht_lib::DHT", "Packet parsing error: {:?}", internal);
                         continue;
                     }
 
@@ -225,7 +225,7 @@ impl DHT {
 
         // Filter out packets sent from port 0. We can't reply to these.
         if addr.port() == 0 {
-            warn!(target: "DHT", "{} has invalid port - dropping packet", addr);
+            warn!(target: "rustydht_lib::DHT", "{} has invalid port - dropping packet", addr);
             return Ok(());
         }
 
@@ -471,11 +471,11 @@ impl DHT {
                                 }
                             }
                         } else {
-                            debug!(target: "DHT", "Ignoring unsolicited find_node response");
+                            debug!(target: "rustydht_lib::DHT", "Ignoring unsolicited find_node response");
                         }
                     }
                     _ => {
-                        info!(target: "DHT",
+                        info!(target: "rustydht_lib::DHT",
                             "Received unsupported/unexpected KRPCResponse variant from {:?}: {:?}",
                             addr, response_variant
                         );
@@ -483,7 +483,7 @@ impl DHT {
                 }
             }
             _ => {
-                warn!(target: "DHT",
+                warn!(target: "rustydht_lib::DHT",
                     "Received unsupported/unexpected KRPCMessage variant from {:?}: {:?}",
                     addr, msg
                 );
@@ -521,7 +521,7 @@ impl DHT {
             Timer::after(Duration::from_secs(self.settings.ping_check_interval_secs)).await;
             let mut buckets = self.buckets.lock().await;
             let count = buckets.count();
-            debug!(target: "DHT",
+            debug!(target: "rustydht_lib::DHT",
                 "Pruning node buckets. Storage has {} unverified, {} verified in {} buckets",
                 count.0,
                 count.1,
@@ -536,11 +536,11 @@ impl DHT {
                 .checked_sub(Duration::from_secs(self.settings.reverify_interval_secs))
             {
                 None => {
-                    debug!(target: "DHT", "Monotonic clock underflow - skipping this round of pings");
+                    debug!(target: "rustydht_lib::DHT", "Monotonic clock underflow - skipping this round of pings");
                 }
 
                 Some(ping_if_older_than) => {
-                    debug!(target: "DHT", "Sending pings to nodes");
+                    debug!(target: "rustydht_lib::DHT", "Sending pings to all nodes that have never verified or haven't been verified in a while");
                     // Ping everybody we haven't verified
                     for wrapper in buckets.get_all_unverified() {
                         // Some things in here are actually verified... don't bother them too often
@@ -548,9 +548,9 @@ impl DHT {
                             if last_verified >= ping_if_older_than {
                                 continue;
                             }
-                            trace!(target: "DHT", "Sending ping to reverify backup {:?}", wrapper.node);
+                            trace!(target: "rustydht_lib::DHT", "Sending ping to reverify backup {:?}", wrapper.node);
                         } else {
-                            trace!(target: "DHT",
+                            trace!(target: "rustydht_lib::DHT",
                                 "Sending ping to verify {:?} (last seen {} seconds ago)",
                                 wrapper.node,
                                 (Instant::now() - wrapper.last_seen).as_secs()
@@ -566,7 +566,7 @@ impl DHT {
                                 continue;
                             }
                         }
-                        trace!(target: "DHT", "Sending ping to reverify {:?}", wrapper.node);
+                        trace!(target: "rustydht_lib::DHT", "Sending ping to reverify {:?}", wrapper.node);
                         self.ping(wrapper.node.address).await?;
                     }
                 }
@@ -589,7 +589,7 @@ impl DHT {
                 }
 
                 if count_unverified > self.settings.find_nodes_skip_count {
-                    debug!(target: "DHT", "Skipping find_node as we already have enough unverified");
+                    debug!(target: "rustydht_lib::DHT", "Skipping find_node as we already have enough unverified");
                     continue;
                 }
             }
@@ -614,7 +614,7 @@ impl DHT {
                 let ip = IpAddr::V4(ip);
                 if !self.our_id.borrow().is_valid_for_ip(&ip) {
                     let new_id = Id::from_ip(&ip);
-                    info!(target: "DHT",
+                    info!(target: "rustydht_lib::DHT",
                         "Our current id {} is not valid for IP {}. Using new id {}",
                         self.our_id.borrow(),
                         ip,
@@ -634,7 +634,7 @@ impl DHT {
             ))
             .await;
             let mut request_storage = self.request_storage.lock().await;
-            debug!(target: "DHT",
+            debug!(target: "rustydht_lib::DHT",
                 "Time to prune request storage (size {})",
                 request_storage.len()
             );
@@ -647,7 +647,7 @@ impl DHT {
     async fn periodic_router_ping(&self) -> Result<(), RustyDHTError> {
         loop {
             Timer::after(Duration::from_secs(self.settings.router_ping_interval_secs)).await;
-            debug!(target:"DHT", "Pinging routers");
+            debug!(target: "rustydht_lib::DHT", "Pinging routers");
             self.ping_routers().await?;
         }
     }
@@ -679,7 +679,7 @@ impl DHT {
             // but they vary by platform and it's a pain. For now, we'll eat all host
             // resolution errors.
             warn!(
-                target: "DHT",
+                target: "rustydht_lib::DHT",
                 "Failed to resolve host {} due to error {:#?}. Try again later.",
                 hostname, err
             );
@@ -688,7 +688,7 @@ impl DHT {
             if let Some(errno) = err.raw_os_error() {
                 // For windows
                 if errno == 11001 {
-                    warn!(target: "DHT", "Failed to resolve host {}. Try again later.", hostname);
+                    warn!(target: "rustydht_lib::DHT", "Failed to resolve host {}. Try again later.", hostname);
                     return Ok(());
                 }
             }
@@ -723,7 +723,7 @@ impl DHT {
         *self.old_token_secret.borrow_mut() = self.token_secret.take();
         *self.token_secret.borrow_mut() = token_secret;
         debug!(
-            target: "DHT",
+            target: "rustydht_lib::DHT",
             "Rotating token secret. New secret is {:?}, old secret is {:?}",
             self.token_secret.borrow(),
             self.old_token_secret.borrow()
@@ -737,7 +737,7 @@ impl DHT {
         // Find the closest nodes to ask
         let nearest = buckets.get_nearest_nodes(&target_id, None);
         trace!(
-            target: "DHT",
+            target: "rustydht_lib::DHT",
             "Sending find_node to {} nodes about {:?}",
             nearest.len(),
             target_id

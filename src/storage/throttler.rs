@@ -75,7 +75,7 @@ impl<const NUM_RECORDS: usize> Throttler<NUM_RECORDS> {
                 found.packets = found.packets + 1;
 
                 if found.packets > self.rate_limit {
-                    debug!(target: "Throttler", "{} is throttled for {:?}. {} packets on record", ip, self.naughty_timeout, found.packets);
+                    debug!(target: "rustydht_lib::Throttler", "{} is throttled for {:?}. {} packets on record", ip, self.naughty_timeout, found.packets);
                     found.expiration = now + self.naughty_timeout;
                     return true;
                 }

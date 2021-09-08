@@ -60,7 +60,7 @@ impl IPV4AddrSource for IPV4Consensus {
         let first = self.votes.first();
         match first {
             Some(vote_info) => {
-                debug!(target: "IPV4AddrSource", "Best IPv4 address {:?} has {} votes", vote_info.ip, vote_info.votes);
+                debug!(target: "rustydht_lib::IPV4AddrSource", "Best IPv4 address {:?} has {} votes", vote_info.ip, vote_info.votes);
                 if vote_info.votes >= self.min_votes.try_into().unwrap() {
                     Some(vote_info.ip)
                 } else {

@@ -653,7 +653,7 @@ pub fn response_matches_request(res: &ResponseSpecific, req: &RequestSpecific) -
         }
 
         _ => {
-            warn!(target: "response_matches_request",
+            warn!(target: "rustydht_lib::response_matches_request",
                 "Unimplemented response type {:?}",
                 res
             );
