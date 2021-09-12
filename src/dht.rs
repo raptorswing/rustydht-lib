@@ -102,7 +102,7 @@ impl DHTSettings {
 
 pub struct DHT {
     ip4_source: Mutex<Box<dyn IPV4AddrSource>>,
-    our_id: RefCell<Id>,
+    our_id: Mutex<Id>,
     socket: UdpSocket,
     buckets: Mutex<Box<dyn NodeStorage>>,
     request_storage: Mutex<OutboundRequestStorage>,
@@ -163,7 +163,7 @@ impl DHT {
 
         Ok(DHT {
             ip4_source: Mutex::new(ip4_source),
-            our_id: RefCell::new(our_id),
+            our_id: Mutex::new(our_id),
             socket: socket,
             buckets: Mutex::new(buckets(our_id)),
             request_storage: Mutex::new(OutboundRequestStorage::new()),
@@ -178,7 +178,7 @@ impl DHT {
         })
     }
 
-    pub async fn accept_incoming_packets(&self) -> Result<(), RustyDHTError> {
+    async fn accept_incoming_packets(&self) -> Result<(), RustyDHTError> {
         let mut throttler = Throttler::new(10, Duration::from_secs(6), Duration::from_secs(60));
         let mut recv_buf = [0; 2048]; // All packets should fit within 1500 anyway
         loop {
@@ -229,6 +229,8 @@ impl DHT {
             return Ok(());
         }
 
+        let our_id = self.get_id().await;
+
         match &msg.message_type {
             packets::MessageType::Request(request_variant) => {
                 match request_variant {
@@ -244,7 +246,7 @@ impl DHT {
 
                         // Build a ping reply
                         let reply = packets::Message::create_ping_response(
-                            *self.our_id.borrow(),
+                            our_id,
                             msg.transaction_id.clone(),
                             addr,
                         );
@@ -284,7 +286,7 @@ impl DHT {
                                 );
 
                                 packets::Message::create_get_peers_response_no_peers(
-                                    self.our_id.borrow().clone(),
+                                    our_id,
                                     msg.transaction_id,
                                     addr,
                                     token.to_vec(),
@@ -293,7 +295,7 @@ impl DHT {
                             }
 
                             _ => packets::Message::create_get_peers_response_peers(
-                                self.our_id.borrow().clone(),
+                                our_id,
                                 msg.transaction_id,
                                 addr,
                                 token.to_vec(),
@@ -324,7 +326,7 @@ impl DHT {
                             .collect();
 
                         let reply = packets::Message::create_find_node_response(
-                            self.our_id.borrow().clone(),
+                            our_id,
                             msg.transaction_id,
                             addr,
                             nearest,
@@ -373,7 +375,7 @@ impl DHT {
 
                             // Response is same for ping, so reuse that
                             let reply = packets::Message::create_ping_response(
-                                *self.our_id.borrow(),
+                                our_id,
                                 msg.transaction_id.clone(),
                                 addr,
                             );
@@ -412,7 +414,7 @@ impl DHT {
                         };
 
                         let reply = packets::Message::create_sample_infohashes_response(
-                            *self.our_id.borrow(),
+                            our_id,
                             msg.transaction_id,
                             addr,
                             Duration::from_secs(
@@ -492,7 +494,7 @@ impl DHT {
         return Ok(());
     }
 
-    /// Runs the main event loop of the DHT. Never returns!
+    /// Runs the main event loop of the DHT. Pings routers, accepts and responds to incoming packets, maintains buckets, etc.
     pub async fn run_event_loop(&self) -> Result<(), RustyDHTError> {
         if let Err(err) = futures::try_join!(
             // One-time
@@ -512,8 +514,9 @@ impl DHT {
         Ok(())
     }
 
-    pub fn get_id(&self) -> Id {
-        self.our_id.borrow().clone()
+    /// Returns the current Id being used by the DHT
+    pub async fn get_id(&self) -> Id {
+        self.our_id.lock().await.clone()
     }
 
     async fn periodic_buddy_ping(&self) -> Result<(), RustyDHTError> {
@@ -596,7 +599,7 @@ impl DHT {
 
             // Search a random node to get diversity
             // let rando =  MainlineId::from_random();
-            let near_us = self.our_id.borrow().make_mutant();
+            let near_us = self.get_id().await.make_mutant();
 
             // self.send_find_node(&rando).await?;
             self.send_find_node(near_us).await?;
@@ -607,20 +610,22 @@ impl DHT {
         loop {
             Timer::after(Duration::from_secs(10)).await;
 
+            let our_id = self.get_id().await;
+
             let mut ip4_source = self.ip4_source.lock().await;
             ip4_source.decay();
 
             if let Some(ip) = ip4_source.get_best_ipv4() {
                 let ip = IpAddr::V4(ip);
-                if !self.our_id.borrow().is_valid_for_ip(&ip) {
+                if !our_id.is_valid_for_ip(&ip) {
                     let new_id = Id::from_ip(&ip);
                     info!(target: "rustydht_lib::DHT",
                         "Our current id {} is not valid for IP {}. Using new id {}",
-                        self.our_id.borrow(),
+                        our_id,
                         ip,
                         new_id
                     );
-                    self.our_id.replace(new_id);
+                    *self.our_id.lock().await = new_id;
                     self.buckets.lock().await.set_id(new_id);
                 }
             }
@@ -660,7 +665,8 @@ impl DHT {
     }
 
     async fn ping(&self, target: SocketAddr) -> Result<(), RustyDHTError> {
-        let req = packets::Message::create_ping_request(*self.our_id.borrow());
+        let our_id = self.get_id().await;
+        let req = packets::Message::create_ping_request(our_id);
         let req_bytes = req.clone().to_bytes()?;
         self.request_storage
             .lock()
@@ -731,6 +737,7 @@ impl DHT {
     }
 
     async fn send_find_node(&self, target_id: Id) -> Result<(), RustyDHTError> {
+        let our_id = self.get_id().await;
         let buckets = self.buckets.lock().await;
         let mut request_storage = self.request_storage.lock().await;
 
@@ -743,7 +750,7 @@ impl DHT {
             target_id
         );
         for node in nearest {
-            let req = packets::Message::create_find_node_request(*self.our_id.borrow(), target_id);
+            let req = packets::Message::create_find_node_request(our_id, target_id);
             let bytes = req.clone().to_bytes()?;
 
             let request_info = RequestInfo::new(node.address, Some(node.id), req);
@@ -951,7 +958,7 @@ mod test {
             )
             .unwrap();
 
-            let server_id = dht.our_id.borrow().clone();
+            let server_id = dht.get_id().await;
 
             let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
             let client_addr = client_socket.local_addr().unwrap();
@@ -1012,7 +1019,7 @@ mod test {
             )
             .unwrap();
 
-            let server_id = dht.our_id.borrow().clone();
+            let server_id = dht.get_id().await;
 
             let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
             let client_addr = client_socket.local_addr().unwrap();
