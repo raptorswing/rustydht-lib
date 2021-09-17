@@ -758,7 +758,7 @@ impl DHT {
             Ok(_) => Ok(()),
             Err(e) => {
                 #[cfg(target_os = "linux")]
-                if e.kind() == std::io::ErrorKind::PermissionDenied && std::env::o {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
                     warn!(target: "rustydht_lib::DHT", "send_to resulted in PermissionDenied. Is conntrack table full?");
                     return Ok(());
                 }
