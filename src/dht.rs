@@ -754,11 +754,17 @@ impl DHT {
     }
 
     async fn send_to(&self, bytes: &Vec<u8>, dest: SocketAddr) -> Result<(), RustyDHTError> {
-        self.socket
-            .send_to(bytes, dest)
-            .await
-            .map_err(|err| RustyDHTError::GeneralError(err.into()))?;
-        Ok(())
+        match self.socket.send_to(bytes, dest).await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                #[cfg(target_os = "linux")]
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    warn!(target: "rustydht_lib::DHT", "send_to resulted in PermissionDenied. Is conntrack table full?");
+                    return Ok(());
+                }
+                Err(RustyDHTError::GeneralError(e.into()))
+            }
+        }
     }
 
     /// Adds a 'vote' for whatever IP address the sender says we have.
