@@ -1,3 +1,5 @@
+use anyhow::anyhow;
+
 use rand::prelude::SliceRandom;
 use rand::{thread_rng, Rng};
 
@@ -167,7 +169,7 @@ impl DHT {
             socket: socket,
             buckets: Mutex::new(buckets(our_id)),
             request_storage: Mutex::new(OutboundRequestStorage::new()),
-            peer_storage: Mutex::new(PeerStorage::new(
+            peer_storage: Mutex::new(PeerStorage::new( 
                 settings.max_torrents,
                 settings.max_peers_per_torrent,
             )),
@@ -194,11 +196,7 @@ impl DHT {
                         continue;
                     }
 
-                    RustyDHTError::GeneralError(_) => {
-                        return Err(err.into());
-                    }
-
-                    RustyDHTError::PacketSerializationError(_) => {
+                    _ => {
                         return Err(err.into());
                     }
                 },
@@ -517,6 +515,19 @@ impl DHT {
     /// Returns the current Id being used by the DHT
     pub async fn get_id(&self) -> Id {
         self.our_id.lock().await.clone()
+    }
+
+    /// Queries the DHT and returns peers for the provided info_hash.
+    pub async fn get_peers(&self, info_hash: Id, timeout: Duration) -> Result<(), RustyDHTError> {
+        smol::future::race(async {
+            Timer::after(timeout).await;
+            Err(RustyDHTError::TimeoutError(anyhow!("Timed out during get_peers")))
+        }, async {
+            loop {
+                Timer::after(Duration::from_secs(2)).await;
+            }
+            Ok(())
+        }).await
     }
 
     async fn periodic_buddy_ping(&self) -> Result<(), RustyDHTError> {
