@@ -179,7 +179,12 @@ impl DHT {
     }
 
     pub async fn accept_incoming_packets(&self) -> Result<(), RustyDHTError> {
-        let mut throttler = Throttler::new(10, Duration::from_secs(6), Duration::from_secs(60));
+        let mut throttler = Throttler::new(
+            10,
+            Duration::from_secs(6),
+            Duration::from_secs(60),
+            Duration::from_secs(86400),
+        );
         let mut recv_buf = [0; 2048]; // All packets should fit within 1500 anyway
         loop {
             match self
@@ -978,6 +983,7 @@ mod test {
                 100,
                 Duration::from_secs(1),
                 Duration::from_secs(1),
+                Duration::from_secs(100),
             );
             let mut recv_buf = [0; 2048];
 
@@ -1047,6 +1053,7 @@ mod test {
                 100,
                 Duration::from_secs(1),
                 Duration::from_secs(1),
+                Duration::from_secs(100),
             );
             let mut recv_buf = [0; 2048];
 
@@ -1225,6 +1232,7 @@ mod test {
             100,
             Duration::from_secs(1),
             Duration::from_secs(1),
+            Duration::from_secs(100),
         );
         let mut recv_buf = [0; 2048];
 
