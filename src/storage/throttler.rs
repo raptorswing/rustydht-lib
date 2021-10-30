@@ -8,15 +8,28 @@ struct ThrottlerRecord {
     ip: IpAddr,
     packets: usize,
     expiration: Instant,
+    creation_time: Instant,
 }
 
 impl Default for ThrottlerRecord {
     fn default() -> Self {
+        let now = Instant::now();
         ThrottlerRecord {
             ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             packets: 0,
-            expiration: Instant::now(),
+            expiration: now,
+            creation_time: now,
         }
+    }
+}
+
+impl ThrottlerRecord {
+    fn clear(&mut self) {
+        let now = Instant::now();
+        self.ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        self.packets = 0;
+        self.expiration = now;
+        self.creation_time = now;
     }
 }
 
@@ -26,6 +39,7 @@ pub struct Throttler<const NUM_RECORDS: usize> {
     rate_limit: usize,
     period: Duration,
     naughty_timeout: Duration,
+    max_tracking: Duration,
 }
 
 impl<const NUM_RECORDS: usize> Throttler<NUM_RECORDS> {
@@ -33,12 +47,14 @@ impl<const NUM_RECORDS: usize> Throttler<NUM_RECORDS> {
         rate_limit: usize,
         period: Duration,
         naughty_timeout: Duration,
+        max_tracking: Duration,
     ) -> Throttler<NUM_RECORDS> {
         Throttler {
             records: [ThrottlerRecord::default(); NUM_RECORDS],
             rate_limit: rate_limit,
             period: period,
             naughty_timeout: naughty_timeout,
+            max_tracking: max_tracking,
         }
     }
 
@@ -71,6 +87,14 @@ impl<const NUM_RECORDS: usize> Throttler<NUM_RECORDS> {
         }
 
         if let Some(found) = found {
+            // If this record has been around for longer than the max tracking time, don't use it and reset to blank
+            if let Some(since_creation) = now.checked_duration_since(found.creation_time) {
+                if since_creation > self.max_tracking {
+                    found.clear();
+                    return false;
+                }
+            }
+
             if now < found.expiration {
                 found.packets = found.packets + 1;
 
@@ -87,6 +111,7 @@ impl<const NUM_RECORDS: usize> Throttler<NUM_RECORDS> {
             lamest.packets = 1;
             lamest.expiration = now + self.period;
             lamest.ip = ip;
+            lamest.creation_time = now;
         } else {
             panic!("This should never happen ;)");
         }
@@ -108,7 +133,12 @@ mod tests {
     #[test]
     // Tests that throttling kicks in and expires with a single IP
     fn test_one_two_punch() {
-        let mut throttler = Throttler::<32>::new(1, Duration::from_secs(5), Duration::from_secs(1));
+        let mut throttler = Throttler::<32>::new(
+            1,
+            Duration::from_secs(5),
+            Duration::from_secs(1),
+            Duration::from_secs(10),
+        );
         let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 50, 1));
 
         assert!(!throttler.check_throttle(ip, None));
@@ -120,7 +150,12 @@ mod tests {
     #[test]
     // Tests that throttling kicks in and expires even if the bookkeeping is already 'full'
     fn test_lots_of_ips() {
-        let mut throttler = Throttler::<32>::new(1, Duration::from_secs(5), Duration::from_secs(1));
+        let mut throttler = Throttler::<32>::new(
+            1,
+            Duration::from_secs(5),
+            Duration::from_secs(1),
+            Duration::from_secs(10),
+        );
 
         let mut ip = IpAddr::V4(Ipv4Addr::new(192, 168, 50, 0));
         for a in 0..throttler.get_num_records() + 1 {
@@ -130,6 +165,26 @@ mod tests {
         }
         assert!(throttler.check_throttle(ip, None));
         let fake_time = Instant::now().add(Duration::from_secs(2));
+        assert!(!throttler.check_throttle(ip, Some(fake_time)));
+    }
+
+    #[test]
+    // Tests that a record is reset after the max tracking period has been reached
+    fn test_max_tracking() {
+        let mut throttler = Throttler::<32>::new(
+            1,
+            Duration::from_secs(5),
+            Duration::from_secs(100),
+            Duration::from_secs(10),
+        );
+        let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 50, 1));
+
+        assert!(!throttler.check_throttle(ip, None));
+        assert!(throttler.check_throttle(ip, None));
+        let fake_time = Instant::now().add(Duration::from_secs(9));
+        assert!(throttler.check_throttle(ip, Some(fake_time)));
+
+        let fake_time = Instant::now().add(Duration::from_secs(11));
         assert!(!throttler.check_throttle(ip, Some(fake_time)));
     }
 }
