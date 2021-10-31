@@ -3,10 +3,12 @@ use std::time::{Duration, Instant};
 
 use log::debug;
 
+type PacketCount = usize;
+
 #[derive(Clone, Copy)]
 struct ThrottlerRecord {
     ip: IpAddr,
-    packets: usize,
+    packets: PacketCount,
     expiration: Instant,
     creation_time: Instant,
 }
@@ -36,7 +38,7 @@ impl ThrottlerRecord {
 pub struct Throttler<const NUM_RECORDS: usize> {
     records: [ThrottlerRecord; NUM_RECORDS],
 
-    rate_limit: usize,
+    rate_limit: PacketCount,
     period: Duration,
     naughty_timeout: Duration,
     max_tracking: Duration,
@@ -44,7 +46,7 @@ pub struct Throttler<const NUM_RECORDS: usize> {
 
 impl<const NUM_RECORDS: usize> Throttler<NUM_RECORDS> {
     pub fn new(
-        rate_limit: usize,
+        rate_limit: PacketCount,
         period: Duration,
         naughty_timeout: Duration,
         max_tracking: Duration,
@@ -59,7 +61,12 @@ impl<const NUM_RECORDS: usize> Throttler<NUM_RECORDS> {
     }
 
     /// Returns true if the provided IP is throttled.
-    pub fn check_throttle(&mut self, ip: IpAddr, now: Option<Instant>) -> bool {
+    pub fn check_throttle(
+        &mut self,
+        ip: IpAddr,
+        now: Option<Instant>,
+        count: Option<PacketCount>,
+    ) -> bool {
         let now = match now {
             Some(instant) => instant,
             None => Instant::now(),
@@ -96,22 +103,30 @@ impl<const NUM_RECORDS: usize> Throttler<NUM_RECORDS> {
             }
 
             if now < found.expiration {
-                found.packets = found.packets + 1;
-
-                if found.packets > self.rate_limit {
-                    debug!(target: "rustydht_lib::Throttler", "{} is throttled for {:?}. {} packets on record", ip, self.naughty_timeout, found.packets);
-                    found.expiration = now + self.naughty_timeout;
-                    return true;
-                }
+                found.packets = found
+                    .packets
+                    .checked_add(count.unwrap_or(1))
+                    .unwrap_or(PacketCount::MAX);
             } else {
-                found.packets = 1;
+                found.packets = count.unwrap_or(1);
                 found.expiration = now + self.period;
             }
+            if found.packets > self.rate_limit {
+                debug!(target: "rustydht_lib::Throttler", "{} is throttled for {:?}. {} packets on record", ip, self.naughty_timeout, found.packets);
+                found.expiration = now + self.naughty_timeout;
+                return true;
+            }
         } else if let Some(lamest) = lamest {
-            lamest.packets = 1;
+            lamest.packets = count.unwrap_or(1);
             lamest.expiration = now + self.period;
             lamest.ip = ip;
             lamest.creation_time = now;
+
+            if lamest.packets > self.rate_limit {
+                debug!(target: "rustydht_lib::Throttler", "{} is throttled for {:?}. {} packets on record", ip, self.naughty_timeout, lamest.packets);
+                lamest.expiration = now + self.naughty_timeout;
+                return true;
+            }
         } else {
             panic!("This should never happen ;)");
         }
@@ -141,10 +156,10 @@ mod tests {
         );
         let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 50, 1));
 
-        assert!(!throttler.check_throttle(ip, None));
-        assert!(throttler.check_throttle(ip, None));
+        assert!(!throttler.check_throttle(ip, None, None));
+        assert!(throttler.check_throttle(ip, None, None));
         let fake_time = Instant::now().add(Duration::from_secs(2));
-        assert!(!throttler.check_throttle(ip, Some(fake_time)));
+        assert!(!throttler.check_throttle(ip, Some(fake_time), None));
     }
 
     #[test]
@@ -161,11 +176,11 @@ mod tests {
         for a in 0..throttler.get_num_records() + 1 {
             let last_octet: u8 = a.try_into().unwrap();
             ip = IpAddr::V4(Ipv4Addr::new(192, 168, 50, last_octet));
-            assert!(!throttler.check_throttle(ip, None));
+            assert!(!throttler.check_throttle(ip, None, None));
         }
-        assert!(throttler.check_throttle(ip, None));
+        assert!(throttler.check_throttle(ip, None, None));
         let fake_time = Instant::now().add(Duration::from_secs(2));
-        assert!(!throttler.check_throttle(ip, Some(fake_time)));
+        assert!(!throttler.check_throttle(ip, Some(fake_time), None));
     }
 
     #[test]
@@ -179,12 +194,28 @@ mod tests {
         );
         let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 50, 1));
 
-        assert!(!throttler.check_throttle(ip, None));
-        assert!(throttler.check_throttle(ip, None));
+        assert!(!throttler.check_throttle(ip, None, None));
+        assert!(throttler.check_throttle(ip, None, None));
         let fake_time = Instant::now().add(Duration::from_secs(9));
-        assert!(throttler.check_throttle(ip, Some(fake_time)));
+        assert!(throttler.check_throttle(ip, Some(fake_time), None));
 
         let fake_time = Instant::now().add(Duration::from_secs(11));
-        assert!(!throttler.check_throttle(ip, Some(fake_time)));
+        assert!(!throttler.check_throttle(ip, Some(fake_time), None));
+    }
+
+    #[test]
+    /// Tests that the throttler avoids overflowing packet counts if that happens somehow
+    fn test_avoids_overflow() {
+        let mut throttler = Throttler::<32>::new(
+            1,
+            Duration::from_secs(5),
+            Duration::from_secs(100),
+            Duration::from_secs(10),
+        );
+        let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 50, 1));
+        assert!(throttler.check_throttle(ip, None, Some(PacketCount::MAX)));
+
+        // Should stil be throttled, but won't panic
+        assert!(throttler.check_throttle(ip, None, None));
     }
 }
