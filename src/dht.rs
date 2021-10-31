@@ -224,7 +224,7 @@ impl DHT {
         let msg = packets::Message::from_bytes(&recv_buf[..num_read])?;
 
         // Drop the packet if the IP has been throttled.
-        if throttler.check_throttle(addr.ip(), None) {
+        if throttler.check_throttle(addr.ip(), None, None) {
             return Ok(());
         }
 
