@@ -199,6 +199,11 @@ impl DHT {
                         continue;
                     }
 
+                    RustyDHTError::ConntrackError(e) => {
+                        warn!(target: "rustydht_lib::DHT", "Connection tracking error: {:?}", e);
+                        continue;
+                    }
+
                     RustyDHTError::GeneralError(_) => {
                         return Err(err.into());
                     }
@@ -670,7 +675,7 @@ impl DHT {
         self.request_storage
             .lock()
             .await
-            .add_request(RequestInfo::new(target, None, req));
+            .add_request(RequestInfo::new(target, None, req, None));
         self.send_to(&req_bytes, target).await?;
         Ok(())
     }
@@ -751,7 +756,7 @@ impl DHT {
             let req = packets::Message::create_find_node_request(*self.our_id.borrow(), target_id);
             let bytes = req.clone().to_bytes()?;
 
-            let request_info = RequestInfo::new(node.address, Some(node.id), req);
+            let request_info = RequestInfo::new(node.address, Some(node.id), req, None);
             request_storage.add_request(request_info);
             self.send_to(&bytes, node.address).await?;
         }
@@ -970,7 +975,7 @@ mod test {
             let req = packets::Message::create_ping_request(server_id);
             {
                 let mut request_storage = dht.request_storage.lock().await;
-                request_storage.add_request(RequestInfo::new(client_addr, None, req.clone()));
+                request_storage.add_request(RequestInfo::new(client_addr, None, req.clone(), None));
             }
 
             let res = packets::Message::create_ping_response(
@@ -1035,7 +1040,7 @@ mod test {
             );
             {
                 let mut request_storage = dht.request_storage.lock().await;
-                request_storage.add_request(RequestInfo::new(client_addr, None, req.clone()));
+                request_storage.add_request(RequestInfo::new(client_addr, None, req.clone(), None));
             }
 
             let returned_node_id = Id::from_random(&mut thread_rng());

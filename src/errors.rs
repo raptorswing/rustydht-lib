@@ -10,5 +10,8 @@ pub enum RustyDHTError {
     PacketSerializationError(#[from] serde_bencode::Error),
 
     #[error("General error: {0}")]
-    GeneralError(#[source]anyhow::Error)
+    GeneralError(#[source] anyhow::Error),
+
+    #[error("Connection tracking error: {0}")]
+    ConntrackError(#[source] anyhow::Error),
 }
