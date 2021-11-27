@@ -6,7 +6,7 @@ use crate::packets::{Message, MessageType};
 use std::time::{Duration, Instant};
 
 use log::debug;
-use smol::channel::Sender;
+use tokio::sync::mpsc;
 
 pub struct OutboundRequestStorage {
     requests: std::collections::HashMap<TransactionId, RequestInfo>,
@@ -88,7 +88,7 @@ pub struct RequestInfo {
     id: Option<Id>,
     packet: Message,
     created_at: Instant,
-    sender: Option<Sender<Message>>,
+    sender: Option<mpsc::Sender<Message>>,
 }
 
 impl RequestInfo {
@@ -96,7 +96,7 @@ impl RequestInfo {
         addr: SocketAddr,
         id: Option<Id>,
         packet: Message,
-        sender: Option<Sender<Message>>,
+        sender: Option<mpsc::Sender<Message>>,
     ) -> RequestInfo {
         RequestInfo {
             addr: addr,

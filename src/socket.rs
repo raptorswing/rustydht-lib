@@ -2,9 +2,9 @@ use crate::common::{Id, Node};
 use crate::errors::RustyDHTError;
 use crate::packets;
 use crate::storage::outbound_request_storage::{OutboundRequestStorage, RequestInfo};
-use smol::channel;
-use smol::net::UdpSocket;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use tokio::net::UdpSocket;
+use tokio::sync::mpsc;
 
 pub struct DHTSocket {
     socket: UdpSocket,
@@ -24,8 +24,8 @@ impl DHTSocket {
         msg: packets::Message,
         dest: SocketAddr,
         dest_id: Option<Id>,
-    ) -> Result<channel::Receiver<packets::Message>, RustyDHTError> {
-        let (sender, receiver) = channel::bounded(1);
+    ) -> Result<mpsc::Receiver<packets::Message>, RustyDHTError> {
+        let (sender, receiver) = mpsc::channel(1);
         let request_info = RequestInfo::new(dest, dest_id, msg.clone(), Some(sender));
         self.request_storage.add_request(request_info);
 
