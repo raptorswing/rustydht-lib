@@ -1,9 +1,10 @@
 use rand::prelude::SliceRandom;
 use rand::{thread_rng, Rng};
 
-use smol::lock::Mutex;
-use smol::net::{resolve, UdpSocket};
-use smol::{prelude::*, Timer};
+use futures::StreamExt;
+use tokio::net::{lookup_host, UdpSocket};
+use tokio::sync::Mutex;
+use tokio::time::sleep;
 
 use log::{debug, info, trace, warn};
 
@@ -114,7 +115,7 @@ pub struct DHT {
 }
 
 impl DHT {
-    pub fn new<B>(
+    pub async fn new<B>(
         id: Option<Id>,
         listen_port: u16,
         ip4_source: Box<dyn IPV4AddrSource>,
@@ -155,8 +156,9 @@ impl DHT {
         let socket = {
             let our_sockaddr =
                 SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), listen_port));
-            smol::block_on(UdpSocket::bind(our_sockaddr))
-                .map_err(|err| RustyDHTError::GeneralError(err.into()))?
+            UdpSocket::bind(our_sockaddr)
+                .await
+                .map_err(|e| RustyDHTError::GeneralError(e.into()))?
         };
 
         let token_secret = make_token_secret(settings.token_secret_size);
@@ -499,7 +501,7 @@ impl DHT {
 
     /// Runs the main event loop of the DHT. Never returns!
     pub async fn run_event_loop(&self) -> Result<(), RustyDHTError> {
-        if let Err(err) = futures::try_join!(
+        if let Err(err) = tokio::try_join!(
             // One-time
             self.ping_routers(),
             // Loop indefinitely
@@ -523,7 +525,7 @@ impl DHT {
 
     async fn periodic_buddy_ping(&self) -> Result<(), RustyDHTError> {
         loop {
-            Timer::after(Duration::from_secs(self.settings.ping_check_interval_secs)).await;
+            sleep(Duration::from_secs(self.settings.ping_check_interval_secs)).await;
             let mut buckets = self.buckets.lock().await;
             let count = buckets.count();
             debug!(target: "rustydht_lib::DHT",
@@ -581,7 +583,7 @@ impl DHT {
 
     async fn periodic_find_node(&self) -> Result<(), RustyDHTError> {
         loop {
-            Timer::after(Duration::from_secs(self.settings.find_nodes_interval_secs)).await;
+            sleep(Duration::from_secs(self.settings.find_nodes_interval_secs)).await;
 
             {
                 let buckets = self.buckets.lock().await;
@@ -610,7 +612,7 @@ impl DHT {
 
     async fn periodic_ip4_maintenance(&self) -> Result<(), RustyDHTError> {
         loop {
-            Timer::after(Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(10)).await;
 
             let mut ip4_source = self.ip4_source.lock().await;
             ip4_source.decay();
@@ -634,7 +636,7 @@ impl DHT {
 
     async fn periodic_request_prune(&self) -> Result<(), RustyDHTError> {
         loop {
-            Timer::after(Duration::from_secs(
+            sleep(Duration::from_secs(
                 self.settings.outgoing_reqiest_check_interval_secs,
             ))
             .await;
@@ -651,7 +653,7 @@ impl DHT {
 
     async fn periodic_router_ping(&self) -> Result<(), RustyDHTError> {
         loop {
-            Timer::after(Duration::from_secs(self.settings.router_ping_interval_secs)).await;
+            sleep(Duration::from_secs(self.settings.router_ping_interval_secs)).await;
             debug!(target: "rustydht_lib::DHT", "Pinging routers");
             self.ping_routers().await?;
         }
@@ -659,7 +661,7 @@ impl DHT {
 
     async fn periodic_token_rotation(&self) -> Result<(), RustyDHTError> {
         loop {
-            Timer::after(Duration::from_secs(300)).await;
+            sleep(Duration::from_secs(300)).await;
             self.rotate_token_secrets();
         }
     }
@@ -678,7 +680,7 @@ impl DHT {
     async fn ping_router<G: AsRef<str>>(&self, hostname: G) -> Result<(), RustyDHTError> {
         let hostname = hostname.as_ref();
         // Resolve and add to request storage
-        let resolve = resolve(hostname).await;
+        let resolve = lookup_host(hostname).await;
         if let Err(err) = resolve {
             // Used to only eat the specific errors corresponding to a failure to resolve,
             // but they vary by platform and it's a pain. For now, we'll eat all host
@@ -824,283 +826,270 @@ mod test {
         static ref LOCK: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
     }
 
-    #[test]
-    fn test_responds_to_ping() -> Result<(), RustyDHTError> {
-        smol::block_on(async {
-            let requester_id = Id::from_random(&mut thread_rng());
-            let ping_request = packets::Message::create_ping_request(requester_id);
+    #[tokio::test]
+    async fn test_responds_to_ping() -> Result<(), RustyDHTError> {
+        let requester_id = Id::from_random(&mut thread_rng());
+        let ping_request = packets::Message::create_ping_request(requester_id);
 
-            let res = futures::try_join!(
-                accept_single_packet(),
-                send_and_receive(ping_request.clone()),
-            )
+        let res = tokio::try_join!(
+            accept_single_packet(),
+            send_and_receive(ping_request.clone()),
+        )
+        .map(|res| res.1)?;
+
+        assert_eq!(res.transaction_id, ping_request.transaction_id);
+        assert_eq!(
+            res.message_type,
+            packets::MessageType::Response(packets::ResponseSpecific::PingResponse(
+                packets::PingResponseArguments {
+                    responder_id: get_dht_id()
+                }
+            ))
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_responds_to_get_peers() -> Result<(), RustyDHTError> {
+        let requester_id = Id::from_random(&mut thread_rng());
+        let desired_info_hash = Id::from_random(&mut thread_rng());
+        let request = packets::Message::create_get_peers_request(requester_id, desired_info_hash);
+
+        let res = tokio::try_join!(accept_single_packet(), send_and_receive(request.clone()))
             .map(|res| res.1)?;
 
-            assert_eq!(res.transaction_id, ping_request.transaction_id);
-            assert_eq!(
-                res.message_type,
-                packets::MessageType::Response(packets::ResponseSpecific::PingResponse(
-                    packets::PingResponseArguments {
-                        responder_id: get_dht_id()
-                    }
-                ))
-            );
+        assert_eq!(res.transaction_id, request.transaction_id);
+        assert!(matches!(
+            res.message_type,
+            packets::MessageType::Response(packets::ResponseSpecific::GetPeersResponse(
+                packets::GetPeersResponseArguments { .. }
+            ))
+        ));
 
-            Ok(())
-        })
+        Ok(())
     }
 
-    #[test]
-    fn test_responds_to_get_peers() -> Result<(), RustyDHTError> {
-        smol::block_on(async {
-            let requester_id = Id::from_random(&mut thread_rng());
-            let desired_info_hash = Id::from_random(&mut thread_rng());
-            let request =
-                packets::Message::create_get_peers_request(requester_id, desired_info_hash);
-
-            let res = futures::try_join!(accept_single_packet(), send_and_receive(request.clone()))
-                .map(|res| res.1)?;
-
-            assert_eq!(res.transaction_id, request.transaction_id);
-            assert!(matches!(
-                res.message_type,
-                packets::MessageType::Response(packets::ResponseSpecific::GetPeersResponse(
-                    packets::GetPeersResponseArguments { .. }
-                ))
-            ));
-
-            Ok(())
-        })
-    }
-
-    #[test]
-    fn test_responds_to_find_node() -> Result<(), RustyDHTError> {
+    #[tokio::test]
+    async fn test_responds_to_find_node() -> Result<(), RustyDHTError> {
         let requester_id = Id::from_random(&mut thread_rng());
         let target = Id::from_random(&mut thread_rng());
-        smol::block_on(async {
-            let request = packets::Message::create_find_node_request(requester_id, target);
+        let request = packets::Message::create_find_node_request(requester_id, target);
 
-            let res = futures::try_join!(accept_single_packet(), send_and_receive(request.clone()))
-                .map(|res| res.1)?;
+        let res = tokio::try_join!(accept_single_packet(), send_and_receive(request.clone()))
+            .map(|res| res.1)?;
 
-            assert_eq!(res.transaction_id, request.transaction_id);
-            assert!(matches!(
-                res.message_type,
-                packets::MessageType::Response(packets::ResponseSpecific::FindNodeResponse(
-                    packets::FindNodeResponseArguments { .. }
-                ))
-            ));
+        assert_eq!(res.transaction_id, request.transaction_id);
+        assert!(matches!(
+            res.message_type,
+            packets::MessageType::Response(packets::ResponseSpecific::FindNodeResponse(
+                packets::FindNodeResponseArguments { .. }
+            ))
+        ));
 
-            Ok(())
-        })
+        Ok(())
     }
 
-    #[test]
-    fn test_responds_to_announce_peer() -> Result<(), RustyDHTError> {
+    #[tokio::test]
+    async fn test_responds_to_announce_peer() -> Result<(), RustyDHTError> {
         let requester_id = Id::from_random(&mut thread_rng());
         let info_hash = Id::from_random(&mut thread_rng());
-        smol::block_on(async {
-            let res = futures::try_join!(
-                accept_packets(2),
-                get_token_announce_peer(requester_id, info_hash)
-            )
-            .map(|res| res.1)?;
+        let res = tokio::try_join!(
+            accept_packets(2),
+            get_token_announce_peer(requester_id, info_hash)
+        )
+        .map(|res| res.1)?;
 
-            assert!(matches!(
-                res.message_type,
-                packets::MessageType::Response(packets::ResponseSpecific::PingResponse(
-                    packets::PingResponseArguments { .. }
-                ))
-            ));
+        assert!(matches!(
+            res.message_type,
+            packets::MessageType::Response(packets::ResponseSpecific::PingResponse(
+                packets::PingResponseArguments { .. }
+            ))
+        ));
 
-            Ok(())
-        })
+        Ok(())
     }
 
-    #[test]
-    fn test_responds_to_sample_infohashes() -> Result<(), RustyDHTError> {
+    #[tokio::test]
+    async fn test_responds_to_sample_infohashes() -> Result<(), RustyDHTError> {
         let requester_id = Id::from_random(&mut thread_rng());
         let target = Id::from_random(&mut thread_rng());
-        smol::block_on(async {
-            let request = packets::Message::create_sample_infohashes_request(requester_id, target);
+        let request = packets::Message::create_sample_infohashes_request(requester_id, target);
 
-            let res = futures::try_join!(accept_single_packet(), send_and_receive(request.clone()))
-                .map(|res| res.1)?;
+        let res = tokio::try_join!(accept_single_packet(), send_and_receive(request.clone()))
+            .map(|res| res.1)?;
 
-            assert_eq!(res.transaction_id, request.transaction_id);
-            assert!(matches!(
-                res.message_type,
-                packets::MessageType::Response(
-                    packets::ResponseSpecific::SampleInfoHashesResponse(
-                        packets::SampleInfoHashesResponseArguments { num: 0, .. }
-                    )
-                )
-            ));
+        assert_eq!(res.transaction_id, request.transaction_id);
+        assert!(matches!(
+            res.message_type,
+            packets::MessageType::Response(packets::ResponseSpecific::SampleInfoHashesResponse(
+                packets::SampleInfoHashesResponseArguments { num: 0, .. }
+            ))
+        ));
 
-            Ok(())
-        })
+        Ok(())
     }
 
-    #[test]
-    fn test_handles_ping_response() -> Result<(), RustyDHTError> {
-        smol::block_on(async {
-            let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
-            let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
-            let buckets = |id| -> Box<dyn NodeStorage> {
-                Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
-                    id, 8,
-                ))
-            };
-            let _lock = LOCK.lock();
-            let dht = DHT::new(
-                Some(get_dht_id()),
-                10001,
-                phony_ip4,
-                buckets,
-                &[],
-                DHTSettings::default(),
-            )
-            .unwrap();
+    #[tokio::test]
+    async fn test_handles_ping_response() -> Result<(), RustyDHTError> {
+        let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
+        let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
+        let buckets = |id| -> Box<dyn NodeStorage> {
+            Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
+                id, 8,
+            ))
+        };
+        let _lock = LOCK.lock();
+        let dht = DHT::new(
+            Some(get_dht_id()),
+            10001,
+            phony_ip4,
+            buckets,
+            &[],
+            DHTSettings::default(),
+        )
+        .await
+        .unwrap();
 
-            let server_id = dht.our_id.borrow().clone();
+        let server_id = dht.our_id.borrow().clone();
 
-            let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-            let client_addr = client_socket.local_addr().unwrap();
-            let client_id = Id::from_random(&mut thread_rng());
-            let req = packets::Message::create_ping_request(server_id);
-            {
-                let mut request_storage = dht.request_storage.lock().await;
-                request_storage.add_request(RequestInfo::new(client_addr, None, req.clone()));
-            }
+        let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let client_addr = client_socket.local_addr().unwrap();
+        let client_id = Id::from_random(&mut thread_rng());
+        let req = packets::Message::create_ping_request(server_id);
+        {
+            let mut request_storage = dht.request_storage.lock().await;
+            request_storage.add_request(RequestInfo::new(client_addr, None, req.clone()));
+        }
 
-            let res = packets::Message::create_ping_response(
-                client_id,
-                req.transaction_id,
-                "127.0.0.1:10001".parse().unwrap(),
-            );
+        let res = packets::Message::create_ping_response(
+            client_id,
+            req.transaction_id,
+            "127.0.0.1:10001".parse().unwrap(),
+        );
 
-            let mut throttler = crate::storage::throttler::Throttler::new(
-                100,
-                Duration::from_secs(1),
-                Duration::from_secs(1),
-                Duration::from_secs(100),
-            );
-            let mut recv_buf = [0; 2048];
+        let mut throttler = crate::storage::throttler::Throttler::new(
+            100,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(100),
+        );
+        let mut recv_buf = [0; 2048];
 
-            futures::try_join!(
-                dht.accept_single_packet(&mut throttler, &mut recv_buf),
-                send_only(res)
-            )?;
+        tokio::try_join!(
+            dht.accept_single_packet(&mut throttler, &mut recv_buf),
+            send_only(res)
+        )?;
 
-            let num_verified = {
-                let buckets = dht.buckets.lock().await;
-                let verified = buckets.get_all_verified();
-                verified.len()
-            };
-            assert_eq!(num_verified, 1);
-
-            Ok(())
-        })
-    }
-
-    #[test]
-    fn test_handles_find_node_response() -> Result<(), RustyDHTError> {
-        smol::block_on(async {
-            let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
-            let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
-            let buckets = |id| -> Box<dyn NodeStorage> {
-                Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
-                    id, 8,
-                ))
-            };
-            let _lock = LOCK.lock();
-            let dht = DHT::new(
-                Some(get_dht_id()),
-                10001,
-                phony_ip4,
-                buckets,
-                &[],
-                DHTSettings::default(),
-            )
-            .unwrap();
-
-            let server_id = dht.our_id.borrow().clone();
-
-            let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-            let client_addr = client_socket.local_addr().unwrap();
-            let client_id = Id::from_random(&mut thread_rng());
-            let req = packets::Message::create_find_node_request(
-                server_id,
-                Id::from_random(&mut thread_rng()),
-            );
-            {
-                let mut request_storage = dht.request_storage.lock().await;
-                request_storage.add_request(RequestInfo::new(client_addr, None, req.clone()));
-            }
-
-            let returned_node_id = Id::from_random(&mut thread_rng());
-            let res = packets::Message::create_find_node_response(
-                client_id,
-                req.transaction_id,
-                "127.0.0.1:10001".parse().unwrap(),
-                vec![Node::new(
-                    returned_node_id,
-                    "127.0.0.2:5050".parse().unwrap(),
-                )],
-            );
-
-            let mut throttler = crate::storage::throttler::Throttler::new(
-                100,
-                Duration::from_secs(1),
-                Duration::from_secs(1),
-                Duration::from_secs(100),
-            );
-            let mut recv_buf = [0; 2048];
-
-            futures::try_join!(
-                dht.accept_single_packet(&mut throttler, &mut recv_buf),
-                send_only(res)
-            )?;
-
+        let num_verified = {
             let buckets = dht.buckets.lock().await;
             let verified = buckets.get_all_verified();
-            let unverified = buckets.get_all_unverified();
-            assert_eq!(verified.len(), 1);
-            assert_eq!(verified[0].node.id, client_id);
-            assert_eq!(unverified.len(), 1);
+            verified.len()
+        };
+        assert_eq!(num_verified, 1);
 
-            Ok(())
-        })
+        Ok(())
     }
 
-    #[test]
-    fn test_event_loop_pings_routers() {
-        smol::block_on(async {
-            let router_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-            let router_addr = router_socket.local_addr().unwrap();
-            let router_id = Id::from_random(&mut thread_rng());
+    #[tokio::test]
+    async fn test_handles_find_node_response() -> Result<(), RustyDHTError> {
+        let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
+        let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
+        let buckets = |id| -> Box<dyn NodeStorage> {
+            Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
+                id, 8,
+            ))
+        };
+        let _lock = LOCK.lock();
+        let dht = DHT::new(
+            Some(get_dht_id()),
+            10001,
+            phony_ip4,
+            buckets,
+            &[],
+            DHTSettings::default(),
+        )
+        .await
+        .unwrap();
 
-            let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
-            let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
-            let buckets = |id| -> Box<dyn NodeStorage> {
-                Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
-                    id, 8,
-                ))
-            };
-            let mut settings = DHTSettings::default();
-            settings.router_ping_interval_secs = 1;
-            let _lock = LOCK.lock();
-            let dht = DHT::new(
-                Some(get_dht_id()),
-                10001,
-                phony_ip4,
-                buckets,
-                &[&router_addr.to_string()],
-                DHTSettings::default(),
-            )
-            .unwrap();
+        let server_id = dht.our_id.borrow().clone();
 
-            smol::future::race(dht.run_event_loop(), async {
+        let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let client_addr = client_socket.local_addr().unwrap();
+        let client_id = Id::from_random(&mut thread_rng());
+        let req = packets::Message::create_find_node_request(
+            server_id,
+            Id::from_random(&mut thread_rng()),
+        );
+        {
+            let mut request_storage = dht.request_storage.lock().await;
+            request_storage.add_request(RequestInfo::new(client_addr, None, req.clone()));
+        }
+
+        let returned_node_id = Id::from_random(&mut thread_rng());
+        let res = packets::Message::create_find_node_response(
+            client_id,
+            req.transaction_id,
+            "127.0.0.1:10001".parse().unwrap(),
+            vec![Node::new(
+                returned_node_id,
+                "127.0.0.2:5050".parse().unwrap(),
+            )],
+        );
+
+        let mut throttler = crate::storage::throttler::Throttler::new(
+            100,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(100),
+        );
+        let mut recv_buf = [0; 2048];
+
+        tokio::try_join!(
+            dht.accept_single_packet(&mut throttler, &mut recv_buf),
+            send_only(res)
+        )?;
+
+        let buckets = dht.buckets.lock().await;
+        let verified = buckets.get_all_verified();
+        let unverified = buckets.get_all_unverified();
+        assert_eq!(verified.len(), 1);
+        assert_eq!(verified[0].node.id, client_id);
+        assert_eq!(unverified.len(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_event_loop_pings_routers() {
+        let router_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let router_addr = router_socket.local_addr().unwrap();
+        let router_id = Id::from_random(&mut thread_rng());
+
+        let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
+        let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
+        let buckets = |id| -> Box<dyn NodeStorage> {
+            Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
+                id, 8,
+            ))
+        };
+        let mut settings = DHTSettings::default();
+        settings.router_ping_interval_secs = 1;
+        let _lock = LOCK.lock();
+        let dht = DHT::new(
+            Some(get_dht_id()),
+            10001,
+            phony_ip4,
+            buckets,
+            &[&router_addr.to_string()],
+            DHTSettings::default(),
+        )
+        .await
+        .unwrap();
+
+        tokio::select! {
+            _ = dht.run_event_loop() => {}
+            _ = async {
                 let mut recv_buf = [0; 2048];
                 let (num_read, remote) = router_socket.recv_from(&mut recv_buf).await.unwrap();
                 let msg = packets::Message::from_bytes(&recv_buf[..num_read]).unwrap();
@@ -1125,19 +1114,16 @@ mod test {
                     .await
                     .expect("Failed to send_to");
                 router_socket.recv_from(&mut recv_buf).await.unwrap();
-                Ok(())
-            })
-            .await
-            .expect("Got an error");
+            } => {}
+        };
 
-            let (unverified, verified) = dht.buckets.lock().await.count();
-            assert_eq!(unverified, 0);
-            assert_eq!(verified, 1);
-        })
+        let (unverified, verified) = dht.buckets.lock().await.count();
+        assert_eq!(unverified, 0);
+        assert_eq!(verified, 1);
     }
 
-    #[test]
-    fn test_token_secret_rotation() {
+    #[tokio::test]
+    async fn test_token_secret_rotation() {
         let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
         let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
         let buckets = |id| -> Box<dyn NodeStorage> {
@@ -1154,6 +1140,7 @@ mod test {
             &[],
             DHTSettings::default(),
         )
+        .await
         .unwrap();
 
         assert_eq!(
@@ -1226,6 +1213,7 @@ mod test {
             &[],
             DHTSettings::default(),
         )
+        .await
         .unwrap();
 
         let mut throttler = crate::storage::throttler::Throttler::new(
