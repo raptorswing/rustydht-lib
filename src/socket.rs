@@ -1,69 +1,151 @@
-use crate::common::{Id, Node};
+use crate::common::Id;
 use crate::errors::RustyDHTError;
 use crate::packets;
 use crate::storage::outbound_request_storage::{OutboundRequestStorage, RequestInfo};
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use anyhow::anyhow;
+use log::{trace, warn};
+use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+
+type MessagePair = (packets::Message, SocketAddr);
 
 pub struct DHTSocket {
-    socket: UdpSocket,
-    request_storage: OutboundRequestStorage,
+    background_task: JoinHandle<()>,
+    recv_from_rx: Arc<Mutex<mpsc::Receiver<MessagePair>>>,
+    send_to_tx: mpsc::Sender<MessagePair>,
+    request_storage: Arc<Mutex<OutboundRequestStorage>>,
 }
 
 impl DHTSocket {
     pub fn new(socket: UdpSocket) -> DHTSocket {
+        let (send_to_tx, send_to_rx) = mpsc::channel(128);
+        let (recv_from_tx, recv_from_rx) = mpsc::channel(128);
+        let request_storage = Arc::new(Mutex::new(OutboundRequestStorage::new()));
+        let request_storage_clone = request_storage.clone();
+        let bgt = tokio::spawn(async move {
+            DHTSocket::background_io(socket, send_to_rx, recv_from_tx, request_storage_clone).await;
+        });
         DHTSocket {
-            socket: socket,
-            request_storage: OutboundRequestStorage::new(),
+            background_task: bgt,
+            recv_from_rx: Arc::new(Mutex::new(recv_from_rx)),
+            send_to_tx: send_to_tx,
+            request_storage: request_storage,
+        }
+    }
+
+    pub async fn recv_from(&self) -> Result<MessagePair, RustyDHTError> {
+        match self.recv_from_rx.lock().await.recv().await {
+            Some(message_pair) => Ok(message_pair),
+            None => Err(RustyDHTError::GeneralError(anyhow!(
+                "Can't recv_from as background i/o task channel has closed"
+            ))),
         }
     }
 
     pub async fn send_to(
-        &mut self,
-        msg: packets::Message,
+        &self,
+        to_send: packets::Message,
         dest: SocketAddr,
         dest_id: Option<Id>,
     ) -> Result<mpsc::Receiver<packets::Message>, RustyDHTError> {
-        let (sender, receiver) = mpsc::channel(1);
-        let request_info = RequestInfo::new(dest, dest_id, msg.clone(), Some(sender));
-        self.request_storage.add_request(request_info);
+        // TODO optimization to only store notification stuff on requests (not on replies too)
+        let (notify_tx, notify_rx) = mpsc::channel(1);
+        self.request_storage
+            .lock()
+            .await
+            .add_request(RequestInfo::new(
+                dest,
+                dest_id,
+                to_send.clone(),
+                Some(notify_tx),
+            ));
 
-        let bytes = msg.to_bytes()?;
-        match self.socket.send_to(&bytes, dest).await {
-            Ok(_) => Ok(receiver),
-            Err(e) => {
-                #[cfg(target_os = "linux")]
-                if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    warn!(target: "rustydht_lib::DHTSocket", "send_to resulted in PermissionDenied. Is conntrack table full?");
-                    return Err(RustyDHTError::ConntrackError(e.into()));
-                }
-                return Err(RustyDHTError::GeneralError(e.into()));
+        self.send_to_tx
+            .send((to_send, dest))
+            .await
+            .map_err(|e| RustyDHTError::GeneralError(e.into()))?;
+        Ok(notify_rx)
+    }
+
+    async fn background_io(
+        socket: UdpSocket,
+        mut send_to_rx: mpsc::Receiver<MessagePair>,
+        recv_from_tx: mpsc::Sender<MessagePair>,
+        request_storage: Arc<Mutex<OutboundRequestStorage>>,
+    ) {
+        trace!(target: "rustydht_lib::DHTSocket", "Starting background I/O task");
+        loop {
+            tokio::select! {
+                _ = DHTSocket::background_io_outgoing(&socket, &mut send_to_rx) => {}
+                _ = DHTSocket::background_io_incoming(&socket, &recv_from_tx, &request_storage) => {}
             }
         }
     }
 
-    pub async fn recv_from(&mut self) -> Result<(packets::Message, SocketAddr), RustyDHTError> {
-        let mut recv_buf = [0; 2048]; // All packets should fit within 1500 anyway
-        let (num_read, src_addr) = self
-            .socket
-            .recv_from(&mut recv_buf)
-            .await
-            .map_err(|err| RustyDHTError::GeneralError(err.into()))?;
-        let msg = packets::Message::from_bytes(&recv_buf[..num_read])?;
-
-        if let packets::MessageType::Error(err_specific) = &msg.message_type {
-            return Ok((msg, src_addr));
+    async fn background_io_outgoing(
+        socket: &UdpSocket,
+        send_to_rx: &mut mpsc::Receiver<MessagePair>,
+    ) -> Result<(), RustyDHTError> {
+        match send_to_rx.recv().await {
+            None => Err(RustyDHTError::GeneralError(anyhow!(
+                "send_to_rx channel is empty and closed"
+            ))),
+            Some((msg, dest)) => {
+                let bytes = msg.to_bytes()?;
+                match socket.send_to(&bytes, dest).await {
+                    Ok(_) => Ok(()),
+                    Err(e) => {
+                        #[cfg(target_os = "linux")]
+                        if e.kind() == std::io::ErrorKind::PermissionDenied {
+                            return Err(RustyDHTError::ConntrackError(anyhow!(
+                                "send_to resulted in PermissionDenied. Is conntrack table full?"
+                            )));
+                        }
+                        Err(RustyDHTError::GeneralError(e.into()))
+                    }
+                }
+            }
         }
+    }
 
-        let sender_id = msg
-            .get_author_id()
-            .expect("Got packet without requester/responder id");
-        // Was someone waiting for this specific message? Send it to them via fancy channel
-        let matching_info = self.request_storage.take_matching_request_info(&msg);
-        if let Some(matching_info) = matching_info {}
+    async fn background_io_incoming(
+        socket: &UdpSocket,
+        recv_from_tx: &mpsc::Sender<MessagePair>,
+        request_storage: &Arc<Mutex<OutboundRequestStorage>>,
+    ) -> Result<(), RustyDHTError> {
+        let mut buf = [0; 2048];
+        let (num_bytes, sender) = socket
+            .recv_from(&mut buf)
+            .await
+            .map_err(|e| RustyDHTError::SocketRecvError(e.into()))?;
+        let message = packets::Message::from_bytes(&buf[..num_bytes])?;
 
-        // Otherwise, return it
-        return Ok((msg, src_addr));
+        // Is this message a reply to something we sent? If so, notify via specific channel
+        if let Some(request_info) = request_storage
+            .lock()
+            .await
+            .take_matching_request_info(&message)
+        {
+            if let Some(response_channel) = request_info.response_channel {
+                if let Err(e) = response_channel.send(message).await {
+                    let message = e.0;
+                    warn!(target: "rustydht_lib::DHTSocket", "Got response, but sending code abandoned the channel receiver. So sad. Response: {:?}. Sender: {:?}", message, sender);
+                }
+            } else {
+                warn!(target: "rustydht_lib::DHTSocket", "Got response, but can't notify due to no channel. I should make channel required. Response: {:?}. Sender: {:?}", message, sender);
+            }
+        }
+        // Otherwise send it to the generic recv_from channel
+        else {
+            recv_from_tx
+                .send((message, sender))
+                .await
+                .map_err(|e| RustyDHTError::GeneralError(e.into()))?;
+        }
+        Ok(())
     }
 }

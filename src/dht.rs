@@ -206,11 +206,7 @@ impl DHT {
                         continue;
                     }
 
-                    RustyDHTError::GeneralError(_) => {
-                        return Err(err.into());
-                    }
-
-                    RustyDHTError::PacketSerializationError(_) => {
+                    _ => {
                         return Err(err.into());
                     }
                 },

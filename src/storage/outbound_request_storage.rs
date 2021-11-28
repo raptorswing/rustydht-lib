@@ -88,7 +88,7 @@ pub struct RequestInfo {
     id: Option<Id>,
     packet: Message,
     created_at: Instant,
-    sender: Option<mpsc::Sender<Message>>,
+    pub(crate) response_channel: Option<mpsc::Sender<Message>>,
 }
 
 impl RequestInfo {
@@ -96,14 +96,14 @@ impl RequestInfo {
         addr: SocketAddr,
         id: Option<Id>,
         packet: Message,
-        sender: Option<mpsc::Sender<Message>>,
+        response_channel: Option<mpsc::Sender<Message>>,
     ) -> RequestInfo {
         RequestInfo {
             addr: addr,
             id: id,
             packet: packet,
             created_at: Instant::now(),
-            sender: sender,
+            response_channel: response_channel,
         }
     }
 }

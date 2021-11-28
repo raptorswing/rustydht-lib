@@ -14,4 +14,13 @@ pub enum RustyDHTError {
 
     #[error("Connection tracking error: {0}")]
     ConntrackError(#[source] anyhow::Error),
+
+    #[error("Socket send error: {0}")]
+    SocketSendError(#[source] std::io::Error),
+
+    #[error("Socket recv error: {0}")]
+    SocketRecvError(#[source] std::io::Error),
+
+    #[error("Operation timed out: {0}")]
+    TimeoutError(#[source] anyhow::Error),
 }
