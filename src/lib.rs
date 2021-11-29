@@ -4,3 +4,4 @@ pub mod errors;
 pub mod packets;
 pub mod socket;
 pub mod storage;
+pub mod shutdown;
