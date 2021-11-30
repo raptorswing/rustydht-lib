@@ -1,36 +1,41 @@
 use crate::common::Id;
 use crate::errors::RustyDHTError;
 use crate::packets;
+use crate::shutdown::ShutdownReceiver;
 use crate::storage::outbound_request_storage::{OutboundRequestStorage, RequestInfo};
 use anyhow::anyhow;
-use log::{trace, warn};
+use log::{error, trace, warn};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 
 type MessagePair = (packets::Message, SocketAddr);
 
 pub struct DHTSocket {
-    background_task: JoinHandle<()>,
     recv_from_rx: Arc<Mutex<mpsc::Receiver<MessagePair>>>,
     send_to_tx: mpsc::Sender<MessagePair>,
     request_storage: Arc<Mutex<OutboundRequestStorage>>,
 }
 
 impl DHTSocket {
-    pub fn new(socket: UdpSocket) -> DHTSocket {
+    pub fn new(shutdown: ShutdownReceiver, socket: UdpSocket) -> DHTSocket {
         let (send_to_tx, send_to_rx) = mpsc::channel(128);
         let (recv_from_tx, recv_from_rx) = mpsc::channel(128);
         let request_storage = Arc::new(Mutex::new(OutboundRequestStorage::new()));
         let request_storage_clone = request_storage.clone();
-        let bgt = tokio::spawn(async move {
-            DHTSocket::background_io(socket, send_to_rx, recv_from_tx, request_storage_clone).await;
+        tokio::spawn(async move {
+            DHTSocket::background_io(
+                shutdown,
+                socket,
+                send_to_rx,
+                recv_from_tx,
+                request_storage_clone,
+            )
+            .await;
         });
         DHTSocket {
-            background_task: bgt,
             recv_from_rx: Arc::new(Mutex::new(recv_from_rx)),
             send_to_tx: send_to_tx,
             request_storage: request_storage,
@@ -41,7 +46,7 @@ impl DHTSocket {
         match self.recv_from_rx.lock().await.recv().await {
             Some(message_pair) => Ok(message_pair),
             None => Err(RustyDHTError::GeneralError(anyhow!(
-                "Can't recv_from as background i/o task channel has closed"
+                "Can't recv_from as background I/O task channel has closed"
             ))),
         }
     }
@@ -51,27 +56,34 @@ impl DHTSocket {
         to_send: packets::Message,
         dest: SocketAddr,
         dest_id: Option<Id>,
-    ) -> Result<mpsc::Receiver<packets::Message>, RustyDHTError> {
-        // TODO optimization to only store notification stuff on requests (not on replies too)
-        let (notify_tx, notify_rx) = mpsc::channel(1);
-        self.request_storage
-            .lock()
-            .await
-            .add_request(RequestInfo::new(
-                dest,
-                dest_id,
-                to_send.clone(),
-                Some(notify_tx),
-            ));
+    ) -> Result<Option<mpsc::Receiver<packets::Message>>, RustyDHTError> {
+        trace!(target: "rustydht_lib::DHTSocket", "Caller wants to send_to {:?} to {}", to_send, dest);
+
+        let mut to_ret = None;
+        // optimization to only store notification stuff on requests (not on replies too)
+        if let packets::MessageType::Request(_) = to_send.message_type {
+            let (notify_tx, notify_rx) = mpsc::channel(1);
+            to_ret = Some(notify_rx);
+            self.request_storage
+                .lock()
+                .await
+                .add_request(RequestInfo::new(
+                    dest,
+                    dest_id,
+                    to_send.clone(),
+                    Some(notify_tx),
+                ));
+        }
 
         self.send_to_tx
             .send((to_send, dest))
             .await
             .map_err(|e| RustyDHTError::GeneralError(e.into()))?;
-        Ok(notify_rx)
+        Ok(to_ret)
     }
 
     async fn background_io(
+        shutdown: ShutdownReceiver,
         socket: UdpSocket,
         mut send_to_rx: mpsc::Receiver<MessagePair>,
         recv_from_tx: mpsc::Sender<MessagePair>,
@@ -79,11 +91,24 @@ impl DHTSocket {
     ) {
         trace!(target: "rustydht_lib::DHTSocket", "Starting background I/O task");
         loop {
-            tokio::select! {
-                _ = DHTSocket::background_io_outgoing(&socket, &mut send_to_rx) => {}
-                _ = DHTSocket::background_io_incoming(&socket, &recv_from_tx, &request_storage) => {}
+            let mut shutdown_clone = shutdown.clone();
+            if let Err(e) = tokio::select! {
+                a = DHTSocket::background_io_outgoing(&socket, &mut send_to_rx) => a,
+                b = DHTSocket::background_io_incoming(&socket, &recv_from_tx, &request_storage) => b,
+                _ = shutdown_clone.watch() => {
+                    trace!(target: "rustydht_lib::DHTSocket", "Background I/O received shutdown signal - shutting down");
+                    break;
+                }
+            } {
+                if let RustyDHTError::PacketParseError(_) = e {
+                    warn!(target: "rustydht_lib::DHTSocket", "Failed to parse incoming bytes: {:?}", e);
+                } else {
+                    error!(target: "rustydht_lib::DHTSocket", "Error in background I/O: {:?}", e);
+                    break;
+                }
             }
         }
+        trace!(target: "rustydht_lib::DHTSocket", "Background I/O terminated");
     }
 
     async fn background_io_outgoing(
@@ -96,6 +121,7 @@ impl DHTSocket {
             ))),
             Some((msg, dest)) => {
                 let bytes = msg.to_bytes()?;
+                trace!(target:"rustydht_lib::DHTSocket", "Sending {} bytes to {}", bytes.len(), dest);
                 match socket.send_to(&bytes, dest).await {
                     Ok(_) => Ok(()),
                     Err(e) => {
@@ -123,6 +149,7 @@ impl DHTSocket {
             .await
             .map_err(|e| RustyDHTError::SocketRecvError(e.into()))?;
         let message = packets::Message::from_bytes(&buf[..num_bytes])?;
+        trace!(target:"rustydht_lib::DHTSocket", "Receiving {:?} from {}", message, sender);
 
         // Is this message a reply to something we sent? If so, notify via specific channel
         if let Some(request_info) = request_storage

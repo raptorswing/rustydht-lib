@@ -23,4 +23,9 @@ pub enum RustyDHTError {
 
     #[error("Operation timed out: {0}")]
     TimeoutError(#[source] anyhow::Error),
+
+    /// This error is a hack for signaling shutdown.
+    /// Don't use unless you're sure you know what you're doing.
+    #[error("It's time to shutdown tasks: {0}")]
+    ShutdownError(#[source] anyhow::Error),
 }

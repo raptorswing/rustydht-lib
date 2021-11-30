@@ -1,8 +1,8 @@
-use std::time::Instant;
-use crate::common::{Node, Id};
 use super::buckets::Bucketable;
+use crate::common::{Id, Node};
+use std::time::Instant;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NodeWrapper {
     pub node: Node,
     pub first_seen: std::time::Instant,

@@ -16,9 +16,9 @@ pub trait NodeStorage {
     /// Returns a tuple of (unverified, verified)
     fn count(&self) -> (usize, usize);
 
-    fn get_all_unverified(&self) -> Vec<&NodeWrapper>;
-    fn get_all_verified(&self) -> Vec<&NodeWrapper>;
-    fn get_nearest_nodes(&self, id: &Id, exclude: Option<&Id>) -> Vec<&Node>;
+    fn get_all_unverified(&self) -> Vec<NodeWrapper>;
+    fn get_all_verified(&self) -> Vec<NodeWrapper>;
+    fn get_nearest_nodes(&self, id: &Id, exclude: Option<&Id>) -> Vec<Node>;
 
     /// Prunes verified to unverified. Prunes unverified to death.
     /// In limited cases pruning may not occur as soon as it can due to overflow issues with the monotonic clock.
@@ -117,19 +117,29 @@ impl NodeStorage for NodeBucketStorage {
         (self.unverified.count(), self.verified.count())
     }
 
-    fn get_all_unverified(&self) -> Vec<&NodeWrapper> {
-        self.unverified.values()
+    fn get_all_unverified(&self) -> Vec<NodeWrapper> {
+        self.unverified
+            .values()
+            .iter()
+            .copied()
+            .map(|nw| nw.clone())
+            .collect()
     }
 
-    fn get_all_verified(&self) -> Vec<&NodeWrapper> {
-        self.verified.values()
+    fn get_all_verified(&self) -> Vec<NodeWrapper> {
+        self.verified
+            .values()
+            .iter()
+            .copied()
+            .map(|nw| nw.clone())
+            .collect()
     }
 
-    fn get_nearest_nodes(&self, id: &Id, exclude: Option<&Id>) -> Vec<&Node> {
+    fn get_nearest_nodes(&self, id: &Id, exclude: Option<&Id>) -> Vec<Node> {
         self.verified
             .get_nearest_nodes(id, exclude)
             .iter()
-            .map(|nw| &nw.node)
+            .map(|nw| nw.node.clone())
             .collect()
     }
 
@@ -228,7 +238,7 @@ mod tests {
 
         // Mark the node as seen again (but not verified)
         storage.add_or_update(node1.clone(), false);
-        let wrapper = storage.get_all_unverified()[0];
+        let wrapper = &storage.get_all_unverified()[0];
 
         // verify last_seen was updated, but still not verified
         assert!(wrapper.last_seen >= before_update);
@@ -238,7 +248,7 @@ mod tests {
         let before_update = std::time::Instant::now();
         storage.add_or_update(node1.clone(), true);
 
-        let wrapper = storage.get_all_verified()[0];
+        let wrapper = &storage.get_all_verified()[0];
 
         // verify it's verified and last_seen updated again
         assert!(wrapper.last_verified.is_some());
@@ -248,7 +258,7 @@ mod tests {
         let before_update = std::time::Instant::now();
         storage.add_or_update(node1.clone(), true);
 
-        let wrapper = storage.get_all_verified()[0];
+        let wrapper = &storage.get_all_verified()[0];
 
         // verify last_verified and last_seen updated again
         assert!(wrapper.last_verified.unwrap() >= before_update);
@@ -258,7 +268,7 @@ mod tests {
         let before_update = std::time::Instant::now();
         storage.add_or_update(node1, false);
 
-        let wrapper = storage.get_all_verified()[0];
+        let wrapper = &storage.get_all_verified()[0];
 
         // It should still be verified but last_seen should be updated
         assert!(wrapper.last_verified.unwrap() <= before_update);
