@@ -65,15 +65,18 @@ impl OutboundRequestStorage {
     pub fn prune_older_than(&mut self, duration: Duration) {
         match Instant::now().checked_sub(duration) {
             None => {
-                debug!(target: "rustydht_lib::NodeBucketStorage",
+                debug!(target: "rustydht_lib::OutboundRequestStorage",
                     "Outbound request storage skipping pruning due to monotonic clock underflow"
                 );
             }
 
             Some(time) => {
+                let len_before = self.requests.len();
                 self.requests.retain(|_, v| -> bool {
                     return v.created_at >= time;
                 });
+                let len_after = self.requests.len();
+                debug!(target: "rustydht_lib::OutboundRequestStorage", "Pruned {} request records", len_before - len_after);
             }
         }
     }

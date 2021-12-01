@@ -7,9 +7,11 @@ use anyhow::anyhow;
 use log::{error, trace, warn};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio::time::sleep;
 
 type MessagePair = (packets::Message, SocketAddr);
 
@@ -94,7 +96,8 @@ impl DHTSocket {
             let mut shutdown_clone = shutdown.clone();
             if let Err(e) = tokio::select! {
                 a = DHTSocket::background_io_outgoing(&socket, &mut send_to_rx) => a,
-                b = DHTSocket::background_io_incoming(&socket, &recv_from_tx, &request_storage) => b,
+                b = DHTSocket::background_io_incoming(&socket, &recv_from_tx, request_storage.clone()) => b,
+                c = DHTSocket::request_cleanup(request_storage.clone()) => c,
                 _ = shutdown_clone.watch() => {
                     trace!(target: "rustydht_lib::DHTSocket", "Background I/O received shutdown signal - shutting down");
                     break;
@@ -141,7 +144,7 @@ impl DHTSocket {
     async fn background_io_incoming(
         socket: &UdpSocket,
         recv_from_tx: &mpsc::Sender<MessagePair>,
-        request_storage: &Arc<Mutex<OutboundRequestStorage>>,
+        request_storage: Arc<Mutex<OutboundRequestStorage>>,
     ) -> Result<(), RustyDHTError> {
         let mut buf = [0; 2048];
         let (num_bytes, sender) = socket
@@ -173,6 +176,17 @@ impl DHTSocket {
                 .await
                 .map_err(|e| RustyDHTError::GeneralError(e.into()))?;
         }
+        Ok(())
+    }
+
+    async fn request_cleanup(
+        request_storage: Arc<Mutex<OutboundRequestStorage>>,
+    ) -> Result<(), RustyDHTError> {
+        sleep(Duration::from_secs(1)).await;
+        request_storage
+            .lock()
+            .await
+            .prune_older_than(Duration::from_secs(60));
         Ok(())
     }
 }

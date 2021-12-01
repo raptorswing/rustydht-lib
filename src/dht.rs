@@ -4,10 +4,8 @@ use rand::prelude::SliceRandom;
 use rand::{thread_rng, Rng};
 
 use futures::StreamExt;
-// use std::sync::Mutex;
 use tokio::net::{lookup_host, UdpSocket};
 use tokio::time::sleep;
-type Mutex<A> = tracing_mutex::stdsync::DebugMutex<A>;
 
 use log::{debug, info, trace, warn};
 
@@ -17,6 +15,7 @@ use crc::{crc32, Hasher32};
 use std::convert::TryInto;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::common::ipv4_addr_src::IPV4AddrSource;
@@ -26,7 +25,6 @@ use crate::packets;
 use crate::shutdown;
 use crate::socket::DHTSocket;
 use crate::storage::node_bucket_storage::NodeStorage;
-use crate::storage::outbound_request_storage::OutboundRequestStorage;
 use crate::storage::peer_storage::PeerStorage;
 use crate::storage::throttler::Throttler;
 
@@ -110,7 +108,6 @@ struct DHTState {
     ip4_source: Box<dyn IPV4AddrSource + Send>,
     our_id: Id,
     buckets: Box<dyn NodeStorage + Send>,
-    request_storage: OutboundRequestStorage,
     peer_storage: PeerStorage,
     token_secret: Vec<u8>,
     old_token_secret: Vec<u8>,
@@ -182,7 +179,6 @@ impl DHT {
                 ip4_source: ip4_source,
                 our_id: our_id,
                 buckets: buckets(our_id),
-                request_storage: OutboundRequestStorage::new(),
                 peer_storage: PeerStorage::new(
                     settings.max_torrents,
                     settings.max_peers_per_torrent,
@@ -475,7 +471,6 @@ impl DHT {
             self.accept_incoming_packets(),
             self.periodic_router_ping(shutdown.clone()),
             self.periodic_buddy_ping(shutdown.clone()),
-            self.periodic_request_prune(),
             self.periodic_find_node(shutdown.clone()),
             self.periodic_ip4_maintenance(),
             self.periodic_token_rotation(),
@@ -659,28 +654,6 @@ impl DHT {
         }
     }
 
-    async fn periodic_request_prune(&self) -> Result<(), RustyDHTError> {
-        loop {
-            let outgoing_reqiest_check_interval_secs = self
-                .state
-                .try_lock()
-                .unwrap()
-                .settings
-                .outgoing_reqiest_check_interval_secs;
-            sleep(Duration::from_secs(outgoing_reqiest_check_interval_secs)).await;
-
-            let mut state = self.state.try_lock().unwrap();
-            debug!(target: "rustydht_lib::DHT",
-                "Time to prune request storage (size {})",
-                state.request_storage.len()
-            );
-            let outgoing_request_prune_secs = state.settings.outgoing_request_prune_secs;
-            state
-                .request_storage
-                .prune_older_than(Duration::from_secs(outgoing_request_prune_secs));
-        }
-    }
-
     async fn periodic_router_ping(
         &self,
         shutdown: shutdown::ShutdownReceiver,
@@ -723,6 +696,7 @@ impl DHT {
                 }
                 _ = sleep(Duration::from_secs(5)) => {debug!(target: "rustydht_lib::DHT", "ping to {} timed out", target);}
             }
+            trace!(target: "rustydht_lib::DHT", "ping_internal task is done");
         });
         Ok(())
     }
@@ -964,7 +938,6 @@ fn make_token_secret(size: usize) -> Vec<u8> {
 mod test {
     use super::*;
     use crate::common::ipv4_addr_src::StaticIPV4AddrSource;
-    use crate::storage::outbound_request_storage::RequestInfo;
     use anyhow::anyhow;
     use lazy_static::lazy_static;
     use std::boxed::Box;
@@ -1102,15 +1075,8 @@ mod test {
 
         let server_id = dht.state.try_lock().unwrap().our_id.clone();
 
-        let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let client_addr = client_socket.local_addr().unwrap();
         let client_id = Id::from_random(&mut thread_rng());
         let req = packets::Message::create_ping_request(server_id);
-        dht.state
-            .try_lock()
-            .unwrap()
-            .request_storage
-            .add_request(RequestInfo::new(client_addr, None, req.clone(), None));
 
         let res = packets::Message::create_ping_response(
             client_id,
@@ -1163,18 +1129,11 @@ mod test {
 
         let server_id = dht.state.try_lock().unwrap().our_id.clone();
 
-        let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let client_addr = client_socket.local_addr().unwrap();
         let client_id = Id::from_random(&mut thread_rng());
         let req = packets::Message::create_find_node_request(
             server_id,
             Id::from_random(&mut thread_rng()),
         );
-        dht.state
-            .try_lock()
-            .unwrap()
-            .request_storage
-            .add_request(RequestInfo::new(client_addr, None, req.clone(), None));
 
         let returned_node_id = Id::from_random(&mut thread_rng());
         let res = packets::Message::create_find_node_response(
@@ -1234,7 +1193,7 @@ mod test {
         .await
         .unwrap();
 
-        let (shutdown_tx, shutdown_rx) = shutdown::create_shutdown();
+        let (_shutdown_tx, shutdown_rx) = shutdown::create_shutdown();
 
         tokio::select! {
             _ = dht.run_event_loop(shutdown_rx) => {}
