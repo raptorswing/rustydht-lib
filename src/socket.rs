@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
-use tokio::time::sleep;
+use tokio::time::interval;
 
 type MessagePair = (packets::Message, SocketAddr);
 
@@ -26,17 +26,25 @@ impl DHTSocket {
         let (send_to_tx, send_to_rx) = mpsc::channel(128);
         let (recv_from_tx, recv_from_rx) = mpsc::channel(128);
         let request_storage = Arc::new(Mutex::new(OutboundRequestStorage::new()));
-        let request_storage_clone = request_storage.clone();
-        tokio::spawn(async move {
-            DHTSocket::background_io(
-                shutdown,
-                socket,
-                send_to_rx,
-                recv_from_tx,
-                request_storage_clone,
-            )
-            .await;
-        });
+        let socket = Arc::new(socket);
+        ShutdownReceiver::spawn_with_shutdown(
+            shutdown.clone(),
+            DHTSocket::background_io_outgoing(socket.clone(), send_to_rx),
+            "DHTSocket background outgoing I/O task",
+            None,
+        );
+        ShutdownReceiver::spawn_with_shutdown(
+            shutdown.clone(),
+            DHTSocket::background_io_incoming(socket, recv_from_tx, request_storage.clone()),
+            "DHTSocket background incoming I/O task",
+            None,
+        );
+        ShutdownReceiver::spawn_with_shutdown(
+            shutdown,
+            DHTSocket::request_cleanup(request_storage.clone()),
+            "DHTSocket background request cleanup task",
+            None,
+        );
         DHTSocket {
             recv_from_rx: Arc::new(Mutex::new(recv_from_rx)),
             send_to_tx: send_to_tx,
@@ -84,37 +92,27 @@ impl DHTSocket {
         Ok(to_ret)
     }
 
-    async fn background_io(
-        shutdown: ShutdownReceiver,
-        socket: UdpSocket,
+    async fn background_io_outgoing(
+        socket: Arc<UdpSocket>,
         mut send_to_rx: mpsc::Receiver<MessagePair>,
-        recv_from_tx: mpsc::Sender<MessagePair>,
-        request_storage: Arc<Mutex<OutboundRequestStorage>>,
     ) {
-        trace!(target: "rustydht_lib::DHTSocket", "Starting background I/O task");
         loop {
-            let mut shutdown_clone = shutdown.clone();
-            if let Err(e) = tokio::select! {
-                a = DHTSocket::background_io_outgoing(&socket, &mut send_to_rx) => a,
-                b = DHTSocket::background_io_incoming(&socket, &recv_from_tx, request_storage.clone()) => b,
-                c = DHTSocket::request_cleanup(request_storage.clone()) => c,
-                _ = shutdown_clone.watch() => {
-                    trace!(target: "rustydht_lib::DHTSocket", "Background I/O received shutdown signal - shutting down");
-                    break;
-                }
-            } {
-                if let RustyDHTError::PacketParseError(_) = e {
-                    warn!(target: "rustydht_lib::DHTSocket", "Failed to parse incoming bytes: {:?}", e);
-                } else {
-                    error!(target: "rustydht_lib::DHTSocket", "Error in background I/O: {:?}", e);
-                    break;
-                }
+            match DHTSocket::background_io_outgoing_single(&socket, &mut send_to_rx).await {
+                Ok(_) => { /* Keep on truckin'!*/ }
+                Err(e) => match e {
+                    RustyDHTError::ConntrackError(_) => {
+                        warn!(target: "rustydht_lib::DHTSocket", "Outgoing traffic may be dropped due to conntrack error: {:?}", e);
+                    }
+                    _ => {
+                        error!(target: "rustydht_lib::DHTSocket", "Error in background outgoing I/O task:{:?}", e);
+                        break;
+                    }
+                },
             }
         }
-        trace!(target: "rustydht_lib::DHTSocket", "Background I/O terminated");
     }
 
-    async fn background_io_outgoing(
+    async fn background_io_outgoing_single(
         socket: &UdpSocket,
         send_to_rx: &mut mpsc::Receiver<MessagePair>,
     ) -> Result<(), RustyDHTError> {
@@ -142,9 +140,33 @@ impl DHTSocket {
     }
 
     async fn background_io_incoming(
-        socket: &UdpSocket,
-        recv_from_tx: &mpsc::Sender<MessagePair>,
+        socket: Arc<UdpSocket>,
+        recv_from_tx: mpsc::Sender<MessagePair>,
         request_storage: Arc<Mutex<OutboundRequestStorage>>,
+    ) {
+        loop {
+            match DHTSocket::background_io_incoming_single(&socket, &recv_from_tx, &request_storage)
+                .await
+            {
+                Ok(_) => { /* Keep on truckin'!*/ }
+                Err(e) => match e {
+                    RustyDHTError::PacketParseError(_) => {
+                        warn!(target: "rustydht_lib::DHTSocket", "Failed to parse incoming packet: {:?}", e);
+                        continue;
+                    }
+                    _ => {
+                        error!(target: "rustydht_lib::DHTSocket", "Error in background incoming I/O task:{:?}", e);
+                        break;
+                    }
+                },
+            }
+        }
+    }
+
+    async fn background_io_incoming_single(
+        socket: &Arc<UdpSocket>,
+        recv_from_tx: &mpsc::Sender<MessagePair>,
+        request_storage: &Arc<Mutex<OutboundRequestStorage>>,
     ) -> Result<(), RustyDHTError> {
         let mut buf = [0; 2048];
         let (num_bytes, sender) = socket
@@ -179,14 +201,15 @@ impl DHTSocket {
         Ok(())
     }
 
-    async fn request_cleanup(
-        request_storage: Arc<Mutex<OutboundRequestStorage>>,
-    ) -> Result<(), RustyDHTError> {
-        sleep(Duration::from_secs(1)).await;
-        request_storage
-            .lock()
-            .await
-            .prune_older_than(Duration::from_secs(60));
-        Ok(())
+    async fn request_cleanup(request_storage: Arc<Mutex<OutboundRequestStorage>>) {
+        let mut interval = interval(Duration::from_secs(10));
+
+        loop {
+            interval.tick().await;
+            request_storage
+                .lock()
+                .await
+                .prune_older_than(Duration::from_secs(10));
+        }
     }
 }

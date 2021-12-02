@@ -682,22 +682,18 @@ impl DHT {
     /// Helper function for internal use. Spawns a new task and does a ping from there, with timeout.
     async fn ping_internal(
         &self,
-        mut shutdown: shutdown::ShutdownReceiver,
+        shutdown: shutdown::ShutdownReceiver,
         target: SocketAddr,
         target_id: Option<Id>,
     ) -> Result<(), RustyDHTError> {
         let state = self.state.clone();
         let socket = self.socket.clone();
-        tokio::spawn(async move {
-            tokio::select! {
-                _ = DHT::ping_impl(state, socket, target, target_id) => {}
-                _ = shutdown.watch() => {
-                    debug!(target: "rustydht_lib::DHT", "ping_internal task shutting down");
-                }
-                _ = sleep(Duration::from_secs(5)) => {debug!(target: "rustydht_lib::DHT", "ping to {} timed out", target);}
-            }
-            trace!(target: "rustydht_lib::DHT", "ping_internal task is done");
-        });
+        shutdown::ShutdownReceiver::spawn_with_shutdown(
+            shutdown,
+            DHT::ping_impl(state, socket, target, target_id),
+            format!("ping to {}", target),
+            Some(Duration::from_secs(5)),
+        );
         Ok(())
     }
 
@@ -825,21 +821,18 @@ impl DHT {
 
     async fn find_node_internal(
         &self,
-        mut shutdown: shutdown::ShutdownReceiver,
+        shutdown: shutdown::ShutdownReceiver,
         target: SocketAddr,
         target_id: Id,
     ) -> Result<(), RustyDHTError> {
         let state = self.state.clone();
         let socket = self.socket.clone();
-        tokio::spawn(async move {
-            tokio::select! {
-                _ = DHT::find_node_impl(state, socket, target, target_id) => {},
-                _ = shutdown.watch() => {
-                    debug!(target: "rustydht_lib::DHT", "find_node_internal task shutting down");
-                }
-                _ = sleep(Duration::from_secs(5)) => {debug!(target: "rustydht_lib::DHT", "find_node timed out");}
-            }
-        });
+        shutdown::ShutdownReceiver::spawn_with_shutdown(
+            shutdown,
+            DHT::find_node_impl(state, socket, target, target_id),
+            format!("find_node to {} for {}", target, target_id),
+            Some(Duration::from_secs(5)),
+        );
         Ok(())
     }
 

@@ -1,6 +1,8 @@
-use log::{info, warn};
+use log::{error, info, trace, warn};
+use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
+use tokio::time::sleep;
 
 #[derive(Clone)]
 pub struct ShutdownReceiver {
@@ -10,7 +12,37 @@ pub struct ShutdownReceiver {
 
 impl ShutdownReceiver {
     pub async fn watch(&mut self) {
-        self.shutdown_rx.changed().await;
+        if let Err(e) = self.shutdown_rx.changed().await {
+            error!(target:"rustydht_lib::ShutdownReceiver", "Error watching shutdown_rx. Sender has dropped? Err:{:?}", e);
+        }
+    }
+
+    pub fn spawn_with_shutdown<T>(
+        mut shutdown: ShutdownReceiver,
+        todo: T,
+        task_name: impl std::fmt::Display + Send + 'static + Sync,
+        timeout: Option<Duration>,
+    ) where
+        T: std::future::Future + Send + 'static,
+        T::Output: Send + 'static,
+    {
+        tokio::spawn(async move {
+            trace!(target: "rustydht_lib::ShutdownReceiver", "Task '{}' starting up", task_name);
+            tokio::select! {
+                _ = shutdown.watch() => {}
+                _ = todo => {}
+                _ = async {
+                    match timeout {
+                        Some(timeout) => {
+                            sleep(timeout).await;
+                            trace!(target: "rustydht_lib::ShutdownReceiver", "Task '{}' timed out", task_name);
+                        }
+                        None => {std::future::pending::<bool>().await;}
+                    };
+                } => {}
+            }
+            trace!(target: "rustydht_lib::ShutdownReceiver", "Task '{}' terminating", task_name);
+        });
     }
 }
 
