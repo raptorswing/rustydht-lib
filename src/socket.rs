@@ -7,16 +7,16 @@ use anyhow::anyhow;
 use log::{error, trace, warn};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use tokio::sync::Mutex;
 use tokio::time::interval;
 
 type MessagePair = (packets::Message, SocketAddr);
 
 pub struct DHTSocket {
-    recv_from_rx: Arc<Mutex<mpsc::Receiver<MessagePair>>>,
+    recv_from_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<MessagePair>>>,
     send_to_tx: mpsc::Sender<MessagePair>,
     request_storage: Arc<Mutex<OutboundRequestStorage>>,
 }
@@ -46,7 +46,7 @@ impl DHTSocket {
             None,
         );
         DHTSocket {
-            recv_from_rx: Arc::new(Mutex::new(recv_from_rx)),
+            recv_from_rx: Arc::new(tokio::sync::Mutex::new(recv_from_rx)),
             send_to_tx: send_to_tx,
             request_storage: request_storage,
         }
@@ -76,7 +76,7 @@ impl DHTSocket {
             to_ret = Some(notify_rx);
             self.request_storage
                 .lock()
-                .await
+                .unwrap()
                 .add_request(RequestInfo::new(
                     dest,
                     dest_id,
@@ -176,12 +176,14 @@ impl DHTSocket {
         let message = packets::Message::from_bytes(&buf[..num_bytes])?;
         trace!(target:"rustydht_lib::DHTSocket", "Receiving {:?} from {}", message, sender);
 
+        let request_info = {
+            request_storage
+                .lock()
+                .unwrap()
+                .take_matching_request_info(&message)
+        };
         // Is this message a reply to something we sent? If so, notify via specific channel
-        if let Some(request_info) = request_storage
-            .lock()
-            .await
-            .take_matching_request_info(&message)
-        {
+        if let Some(request_info) = request_info {
             if let Some(response_channel) = request_info.response_channel {
                 if let Err(e) = response_channel.send(message).await {
                     let message = e.0;
@@ -208,7 +210,7 @@ impl DHTSocket {
             interval.tick().await;
             request_storage
                 .lock()
-                .await
+                .unwrap()
                 .prune_older_than(Duration::from_secs(10));
         }
     }
