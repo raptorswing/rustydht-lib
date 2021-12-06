@@ -63,7 +63,7 @@ impl PeerStorage {
                 .iter()
                 .filter(|pi| pi.0.ip().is_ipv4()) // Only return IPv4 for now, you dog!
                 .filter(|pi| newer_than.is_none() || pi.1.last_updated > newer_than.unwrap())
-                .map(|pi| pi.0.clone())
+                .map(|pi| pi.1.addr)
                 .collect();
             to_ret.append(&mut tmp);
         }

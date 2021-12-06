@@ -684,7 +684,7 @@ impl DHT {
                 id_near_us
             );
             for node in nearest_nodes {
-                self.find_node_internal(shutdown.clone(), node.address, id_near_us)
+                self.find_node_internal(shutdown.clone(), node.address, Some(node.id), id_near_us)
                     .await?;
             }
         }
@@ -882,15 +882,16 @@ impl DHT {
     async fn find_node_internal(
         &self,
         shutdown: shutdown::ShutdownReceiver,
-        target: SocketAddr,
-        target_id: Id,
+        dest: SocketAddr,
+        dest_id: Option<Id>,
+        target: Id,
     ) -> Result<(), RustyDHTError> {
         let state = self.state.clone();
         let socket = self.socket.clone();
         shutdown::ShutdownReceiver::spawn_with_shutdown(
             shutdown,
-            DHT::find_node_impl(state, socket, target, target_id),
-            format!("find_node to {} for {}", target, target_id),
+            DHT::find_node_impl(state, socket, dest, dest_id, target),
+            format!("find_node to {} for {}", dest, target),
             Some(Duration::from_secs(5)),
         );
         Ok(())
@@ -898,24 +899,26 @@ impl DHT {
 
     pub async fn find_node(
         &self,
-        target: SocketAddr,
-        target_id: Id,
+        dest: SocketAddr,
+        dest_id: Option<Id>,
+        target: Id,
     ) -> Result<packets::Message, RustyDHTError> {
         let state = self.state.clone();
         let socket = self.socket.clone();
-        DHT::find_node_impl(state, socket, target, target_id).await
+        DHT::find_node_impl(state, socket, dest, dest_id, target).await
     }
 
     async fn find_node_impl(
         state: Arc<Mutex<DHTState>>,
         socket: Arc<DHTSocket>,
-        target: SocketAddr,
-        target_id: Id,
+        dest: SocketAddr,
+        dest_id: Option<Id>,
+        target: Id,
     ) -> Result<packets::Message, RustyDHTError> {
         let our_id = state.try_lock().unwrap().our_id;
-        let req = packets::Message::create_find_node_request(our_id, target_id);
+        let req = packets::Message::create_find_node_request(our_id, target);
         let mut reply_channel = socket
-            .send_to(req, target, Some(target_id))
+            .send_to(req, dest, dest_id)
             .await?
             .expect("Didn't receive reply notification channel");
 
@@ -926,10 +929,10 @@ impl DHT {
                 ) = &reply.message_type
                 {
                     let mut state = state.try_lock().unwrap();
-                    DHT::ip4_vote_helper(&mut state, &target, &reply);
+                    DHT::ip4_vote_helper(&mut state, &dest, &reply);
                     state
                         .buckets
-                        .add_or_update(Node::new(arguments.responder_id, target), true);
+                        .add_or_update(Node::new(arguments.responder_id, dest), true);
 
                     // Add the nodes we got back as "seen" (even though we haven't necessarily seen them directly yet).
                     // They will be pinged later in an attempt to verify them.

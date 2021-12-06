@@ -180,7 +180,7 @@ impl DHTSocket {
             request_storage
                 .lock()
                 .unwrap()
-                .take_matching_request_info(&message)
+                .take_matching_request_info(&message, sender)
         };
         // Is this message a reply to something we sent? If so, notify via specific channel
         if let Some(request_info) = request_info {
