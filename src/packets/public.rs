@@ -884,7 +884,7 @@ mod tests {
                 GetPeersResponseArguments {
                     responder_id: Id::from_hex("0505050505050505050505050505050505050505").unwrap(),
                     token: vec![99, 100, 101, 102],
-                    values: GetPeersResponseValues::Peers(vec!["123.123.123.0:123"
+                    values: GetPeersResponseValues::Peers(vec!["123.123.123.123:123"
                         .parse()
                         .unwrap()]),
                 },
