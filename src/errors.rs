@@ -10,5 +10,22 @@ pub enum RustyDHTError {
     PacketSerializationError(#[from] serde_bencode::Error),
 
     #[error("General error: {0}")]
-    GeneralError(#[source]anyhow::Error)
+    GeneralError(#[source] anyhow::Error),
+
+    #[error("Connection tracking error: {0}")]
+    ConntrackError(#[source] anyhow::Error),
+
+    #[error("Socket send error: {0}")]
+    SocketSendError(#[source] std::io::Error),
+
+    #[error("Socket recv error: {0}")]
+    SocketRecvError(#[source] std::io::Error),
+
+    #[error("Operation timed out: {0}")]
+    TimeoutError(#[source] anyhow::Error),
+
+    /// This error is a hack for signaling shutdown.
+    /// Don't use unless you're sure you know what you're doing.
+    #[error("It's time to shutdown tasks: {0}")]
+    ShutdownError(#[source] anyhow::Error),
 }

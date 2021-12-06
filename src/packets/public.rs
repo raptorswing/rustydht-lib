@@ -450,6 +450,29 @@ impl Message {
         Message::from_serde_message(internal::DHTMessage::from_bytes(bytes)?)
     }
 
+    pub fn get_author_id(&self) -> Option<Id> {
+        let id = match &self.message_type {
+            MessageType::Request(request_variant) => match request_variant {
+                RequestSpecific::AnnouncePeerRequest(arguments) => arguments.requester_id,
+                RequestSpecific::FindNodeRequest(arguments) => arguments.requester_id,
+                RequestSpecific::GetPeersRequest(arguments) => arguments.requester_id,
+                RequestSpecific::PingRequest(arguments) => arguments.requester_id,
+                RequestSpecific::SampleInfoHashesRequest(arguments) => arguments.requester_id,
+            },
+            MessageType::Response(response_variant) => match response_variant {
+                ResponseSpecific::FindNodeResponse(arguments) => arguments.responder_id,
+                ResponseSpecific::GetPeersResponse(arguments) => arguments.responder_id,
+                ResponseSpecific::PingResponse(arguments) => arguments.responder_id,
+                ResponseSpecific::SampleInfoHashesResponse(arguments) => arguments.responder_id,
+            },
+            MessageType::Error(_) => {
+                return None;
+            }
+        };
+
+        return Some(id);
+    }
+
     pub fn create_ping_request(requester_id: Id) -> Message {
         let mut rng = thread_rng();
         Message {

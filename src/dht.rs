@@ -1,9 +1,11 @@
+use anyhow::anyhow;
+
 use rand::prelude::SliceRandom;
 use rand::{thread_rng, Rng};
 
 use futures::StreamExt;
 use tokio::net::{lookup_host, UdpSocket};
-use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 use log::{debug, info, trace, warn};
@@ -11,17 +13,20 @@ use log::{debug, info, trace, warn};
 extern crate crc;
 use crc::{crc32, Hasher32};
 
-use std::cell::RefCell;
 use std::convert::TryInto;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::common::ipv4_addr_src::IPV4AddrSource;
 use crate::common::{Id, Node};
+use crate::dht_event::{DHTEvent, DHTEventType, MessageReceivedEvent};
 use crate::errors::RustyDHTError;
 use crate::packets;
+use crate::shutdown;
+use crate::socket::DHTSocket;
 use crate::storage::node_bucket_storage::NodeStorage;
-use crate::storage::outbound_request_storage::{OutboundRequestStorage, RequestInfo};
 use crate::storage::peer_storage::PeerStorage;
 use crate::storage::throttler::Throttler;
 
@@ -101,30 +106,39 @@ impl DHTSettings {
     }
 }
 
-pub struct DHT {
-    ip4_source: Mutex<Box<dyn IPV4AddrSource>>,
-    our_id: RefCell<Id>,
-    socket: UdpSocket,
-    buckets: Mutex<Box<dyn NodeStorage>>,
-    request_storage: Mutex<OutboundRequestStorage>,
-    peer_storage: Mutex<PeerStorage>,
-    token_secret: RefCell<Vec<u8>>,
-    old_token_secret: RefCell<Vec<u8>>,
+struct DHTState {
+    ip4_source: Box<dyn IPV4AddrSource + Send>,
+    our_id: Id,
+    buckets: Box<dyn NodeStorage + Send>,
+    peer_storage: PeerStorage,
+    token_secret: Vec<u8>,
+    old_token_secret: Vec<u8>,
     routers: Vec<String>,
     settings: DHTSettings,
+    subscribers: Vec<mpsc::Sender<DHTEvent>>,
+}
+
+pub struct DHT {
+    socket: Arc<DHTSocket>,
+
+    // Coarse-grained locking for stuff what needs it
+    state: Arc<Mutex<DHTState>>,
+
+    shutdown: shutdown::ShutdownReceiver,
 }
 
 impl DHT {
     pub async fn new<B>(
+        shutdown: shutdown::ShutdownReceiver,
         id: Option<Id>,
         listen_port: u16,
-        ip4_source: Box<dyn IPV4AddrSource>,
+        ip4_source: Box<dyn IPV4AddrSource + Send>,
         buckets: B,
         routers: &[&str],
         settings: DHTSettings,
     ) -> Result<DHT, RustyDHTError>
     where
-        B: FnOnce(Id) -> Box<dyn NodeStorage>,
+        B: FnOnce(Id) -> Box<dyn NodeStorage + Send>,
     {
         // If we were given a hardcoded id, use that until/unless we decide its invalid based on IP source.
         // If we weren't given a hardcoded id, try to generate one based on IP source.
@@ -160,39 +174,42 @@ impl DHT {
                 .await
                 .map_err(|e| RustyDHTError::GeneralError(e.into()))?
         };
+        let socket = Arc::new(DHTSocket::new(shutdown.clone(), socket));
 
         let token_secret = make_token_secret(settings.token_secret_size);
 
-        Ok(DHT {
-            ip4_source: Mutex::new(ip4_source),
-            our_id: RefCell::new(our_id),
+        let dht = DHT {
             socket: socket,
-            buckets: Mutex::new(buckets(our_id)),
-            request_storage: Mutex::new(OutboundRequestStorage::new()),
-            peer_storage: Mutex::new(PeerStorage::new(
-                settings.max_torrents,
-                settings.max_peers_per_torrent,
-            )),
-            token_secret: RefCell::new(token_secret.clone()),
-            old_token_secret: RefCell::new(token_secret),
-            routers: routers.iter().map(|s| String::from(*s)).collect(),
-            settings: settings,
-        })
+            state: Arc::new(Mutex::new(DHTState {
+                ip4_source: ip4_source,
+                our_id: our_id,
+                buckets: buckets(our_id),
+                peer_storage: PeerStorage::new(
+                    settings.max_torrents,
+                    settings.max_peers_per_torrent,
+                ),
+                token_secret: token_secret.clone(),
+                old_token_secret: token_secret,
+                routers: routers.iter().map(|s| String::from(*s)).collect(),
+                settings: settings,
+                subscribers: vec![],
+            })),
+
+            shutdown: shutdown,
+        };
+
+        Ok(dht)
     }
 
-    pub async fn accept_incoming_packets(&self) -> Result<(), RustyDHTError> {
+    async fn accept_incoming_packets(&self) -> Result<(), RustyDHTError> {
         let mut throttler = Throttler::new(
             10,
             Duration::from_secs(6),
             Duration::from_secs(60),
             Duration::from_secs(86400),
         );
-        let mut recv_buf = [0; 2048]; // All packets should fit within 1500 anyway
         loop {
-            match self
-                .accept_single_packet(&mut throttler, &mut recv_buf)
-                .await
-            {
+            match self.accept_single_packet(&mut throttler).await {
                 Ok(_) => continue,
 
                 Err(err) => match err {
@@ -201,11 +218,12 @@ impl DHT {
                         continue;
                     }
 
-                    RustyDHTError::GeneralError(_) => {
-                        return Err(err.into());
+                    RustyDHTError::ConntrackError(e) => {
+                        warn!(target: "rustydht_lib::DHT", "Connection tracking error: {:?}", e);
+                        continue;
                     }
 
-                    RustyDHTError::PacketSerializationError(_) => {
+                    _ => {
                         return Err(err.into());
                     }
                 },
@@ -216,14 +234,8 @@ impl DHT {
     async fn accept_single_packet(
         &self,
         throttler: &mut Throttler<32>,
-        recv_buf: &mut [u8; 2048],
     ) -> Result<(), RustyDHTError> {
-        let (num_read, addr) = self
-            .socket
-            .recv_from(recv_buf)
-            .await
-            .map_err(|err| RustyDHTError::GeneralError(err.into()))?;
-        let msg = packets::Message::from_bytes(&recv_buf[..num_read])?;
+        let (msg, addr) = self.socket.recv_from().await?;
 
         // Drop the packet if the IP has been throttled.
         if throttler.check_throttle(addr.ip(), None, None) {
@@ -236,6 +248,10 @@ impl DHT {
             return Ok(());
         }
 
+        // We'll use this clone to send an event later.
+        // "It's a surprise tool that will help us later!"
+        let msg_event_clone = msg.clone();
+
         match &msg.message_type {
             packets::MessageType::Request(request_variant) => {
                 match request_variant {
@@ -243,252 +259,214 @@ impl DHT {
                         // Is id valid for IP?
                         let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
                         if is_id_valid {
-                            self.buckets
-                                .lock()
-                                .await
+                            self.state
+                                .try_lock()
+                                .unwrap()
+                                .buckets
                                 .add_or_update(Node::new(arguments.requester_id, addr), false);
                         }
 
                         // Build a ping reply
                         let reply = packets::Message::create_ping_response(
-                            *self.our_id.borrow(),
+                            self.state.try_lock().unwrap().our_id,
                             msg.transaction_id.clone(),
                             addr,
                         );
-                        let reply_bytes = reply.to_bytes()?;
-                        self.send_to(&reply_bytes, addr).await?;
+                        self.socket
+                            .send_to(reply, addr, Some(arguments.requester_id))
+                            .await?;
                     }
 
                     packets::RequestSpecific::GetPeersRequest(arguments) => {
-                        // Is id valid for IP?
-                        let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
-                        if is_id_valid {
-                            self.buckets
-                                .lock()
-                                .await
-                                .add_or_update(Node::new(arguments.requester_id, addr), false);
-                        }
+                        let reply = {
+                            let mut state = self.state.try_lock().unwrap();
+                            // Is id valid for IP?
+                            let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
+                            if is_id_valid {
+                                state
+                                    .buckets
+                                    .add_or_update(Node::new(arguments.requester_id, addr), false);
+                            }
 
-                        // First, see if we have any peers for their info_hash
-                        let peers = {
-                            let peer_storage = self.peer_storage.lock().await;
-                            let newer_than = Instant::now().checked_sub(Duration::from_secs(
-                                self.settings.get_peers_freshness_secs,
-                            ));
-                            let mut peers =
-                                peer_storage.get_peers(&arguments.info_hash, newer_than);
-                            peers.truncate(self.settings.max_peers_response);
-                            peers
-                        };
-                        let token = calculate_token(&addr, self.token_secret.borrow().clone());
+                            // First, see if we have any peers for their info_hash
+                            let peers = {
+                                let newer_than = Instant::now().checked_sub(Duration::from_secs(
+                                    state.settings.get_peers_freshness_secs,
+                                ));
+                                let mut peers = state
+                                    .peer_storage
+                                    .get_peers(&arguments.info_hash, newer_than);
+                                peers.truncate(state.settings.max_peers_response);
+                                peers
+                            };
+                            let token = calculate_token(&addr, state.token_secret.clone());
 
-                        let reply = match peers.len() {
-                            0 => {
-                                let buckets = self.buckets.lock().await;
-                                let nearest = buckets.get_nearest_nodes(
-                                    &arguments.info_hash,
-                                    Some(&arguments.requester_id),
-                                );
+                            let reply = match peers.len() {
+                                0 => {
+                                    let nearest = state.buckets.get_nearest_nodes(
+                                        &arguments.info_hash,
+                                        Some(&arguments.requester_id),
+                                    );
 
-                                packets::Message::create_get_peers_response_no_peers(
-                                    self.our_id.borrow().clone(),
+                                    packets::Message::create_get_peers_response_no_peers(
+                                        state.our_id.clone(),
+                                        msg.transaction_id,
+                                        addr,
+                                        token.to_vec(),
+                                        nearest,
+                                    )
+                                }
+
+                                _ => packets::Message::create_get_peers_response_peers(
+                                    state.our_id.clone(),
                                     msg.transaction_id,
                                     addr,
                                     token.to_vec(),
-                                    nearest.iter().map(|&node| node.clone()).collect(),
-                                )
-                            }
-
-                            _ => packets::Message::create_get_peers_response_peers(
-                                self.our_id.borrow().clone(),
-                                msg.transaction_id,
-                                addr,
-                                token.to_vec(),
-                                peers,
-                            ),
+                                    peers,
+                                ),
+                            };
+                            reply
                         };
-
-                        let reply_bytes = reply.to_bytes()?;
-                        self.send_to(&reply_bytes, addr).await?;
+                        self.socket
+                            .send_to(reply, addr, Some(arguments.requester_id))
+                            .await?;
                     }
 
                     packets::RequestSpecific::FindNodeRequest(arguments) => {
-                        // Is id valid for IP?
-                        let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
-                        if is_id_valid {
-                            self.buckets
-                                .lock()
-                                .await
-                                .add_or_update(Node::new(arguments.requester_id, addr), false);
-                        }
+                        let reply = {
+                            let mut state = self.state.try_lock().unwrap();
+                            // Is id valid for IP?
+                            let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
+                            if is_id_valid {
+                                state
+                                    .buckets
+                                    .add_or_update(Node::new(arguments.requester_id, addr), false);
+                            }
+                            // We're fine to respond regardless
+                            let nearest = state.buckets.get_nearest_nodes(
+                                &arguments.target,
+                                Some(&arguments.requester_id),
+                            );
+                            packets::Message::create_find_node_response(
+                                state.our_id.clone(),
+                                msg.transaction_id,
+                                addr,
+                                nearest,
+                            )
+                        };
 
-                        // We're fine to respond regardless
-                        let buckets = self.buckets.lock().await;
-                        let nearest = buckets
-                            .get_nearest_nodes(&arguments.target, Some(&arguments.requester_id))
-                            .iter()
-                            .map(|&n_ref| n_ref.clone())
-                            .collect();
-
-                        let reply = packets::Message::create_find_node_response(
-                            self.our_id.borrow().clone(),
-                            msg.transaction_id,
-                            addr,
-                            nearest,
-                        );
-                        let reply_bytes = reply.to_bytes()?;
-                        self.send_to(&reply_bytes, addr).await?;
+                        self.socket
+                            .send_to(reply, addr, Some(arguments.requester_id))
+                            .await?;
                     }
 
                     packets::RequestSpecific::AnnouncePeerRequest(arguments) => {
-                        let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
+                        let reply = {
+                            let mut state = self.state.try_lock().unwrap();
+                            let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
 
-                        let is_token_valid = arguments.token
-                            == calculate_token(&addr, self.token_secret.borrow().clone())
-                            || arguments.token
-                                == calculate_token(&addr, self.old_token_secret.borrow().clone());
+                            let is_token_valid = arguments.token
+                                == calculate_token(&addr, state.token_secret.clone())
+                                || arguments.token
+                                    == calculate_token(&addr, state.old_token_secret.clone());
 
-                        if is_id_valid {
-                            if is_token_valid {
-                                self.buckets
-                                    .lock()
-                                    .await
-                                    .add_or_update(Node::new(arguments.requester_id, addr), true);
-                            } else {
-                                self.buckets
-                                    .lock()
-                                    .await
-                                    .add_or_update(Node::new(arguments.requester_id, addr), false);
+                            if is_id_valid {
+                                state.buckets.add_or_update(
+                                    Node::new(arguments.requester_id, addr),
+                                    is_token_valid,
+                                );
                             }
-                        }
 
-                        if is_token_valid {
-                            let sockaddr = match arguments.implied_port {
-                                Some(implied_port) if implied_port == true => addr,
+                            if is_token_valid {
+                                let sockaddr = match arguments.implied_port {
+                                    Some(implied_port) if implied_port == true => addr,
 
-                                _ => {
-                                    let mut tmp = addr.clone();
-                                    tmp.set_port(arguments.port);
-                                    tmp
-                                }
-                            };
+                                    _ => {
+                                        let mut tmp = addr.clone();
+                                        tmp.set_port(arguments.port);
+                                        tmp
+                                    }
+                                };
 
-                            self.peer_storage
-                                .lock()
-                                .await
-                                .announce_peer(arguments.info_hash, sockaddr);
+                                state
+                                    .peer_storage
+                                    .announce_peer(arguments.info_hash, sockaddr);
 
-                            // Response is same for ping, so reuse that
-                            let reply = packets::Message::create_ping_response(
-                                *self.our_id.borrow(),
-                                msg.transaction_id.clone(),
-                                addr,
-                            );
-                            let reply_bytes = reply.to_bytes()?;
-                            self.send_to(&reply_bytes, addr).await?;
+                                // Response is same for ping, so reuse that
+                                Some(packets::Message::create_ping_response(
+                                    state.our_id,
+                                    msg.transaction_id.clone(),
+                                    addr,
+                                ))
+                            } else {
+                                None
+                            }
+                        };
+
+                        if let Some(reply) = reply {
+                            self.socket
+                                .send_to(reply, addr, Some(arguments.requester_id))
+                                .await?;
                         }
                     }
 
                     packets::RequestSpecific::SampleInfoHashesRequest(arguments) => {
-                        let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
-                        let mut buckets = self.buckets.lock().await;
-                        if is_id_valid {
-                            buckets.add_or_update(Node::new(arguments.requester_id, addr), false);
-                        }
-
-                        let nearest = buckets
-                            .get_nearest_nodes(&arguments.target, Some(&arguments.requester_id))
-                            .iter()
-                            .map(|&n_ref| n_ref.clone())
-                            .collect();
-
-                        let (info_hashes, total_info_hashes) = {
-                            let peer_storage = self.peer_storage.lock().await;
-                            let info_hashes = peer_storage.get_info_hashes();
-                            let total_info_hashes = info_hashes.len();
-                            let info_hashes = {
-                                let mut rng = thread_rng();
-                                peer_storage
-                                    .get_info_hashes()
-                                    .as_mut_slice()
-                                    .partial_shuffle(&mut rng, self.settings.max_sample_response)
-                                    .0
-                                    .to_vec()
-                            };
-                            (info_hashes, total_info_hashes)
-                        };
-
-                        let reply = packets::Message::create_sample_infohashes_response(
-                            *self.our_id.borrow(),
-                            msg.transaction_id,
-                            addr,
-                            Duration::from_secs(
-                                self.settings.min_sample_interval_secs.try_into().unwrap(),
-                            ),
-                            nearest,
-                            info_hashes,
-                            total_info_hashes,
-                        );
-                        let reply_bytes = reply.to_bytes()?;
-                        self.send_to(&reply_bytes, addr).await?;
-                    }
-                }
-            }
-
-            packets::MessageType::Response(response_variant) => {
-                match response_variant {
-                    packets::ResponseSpecific::PingResponse(arguments) => {
-                        let is_id_valid = arguments.responder_id.is_valid_for_ip(&addr.ip());
-                        if !is_id_valid {
-                            return Ok(());
-                        }
-                        // Does this response correspond to a request we sent recently?
-                        let has_matching_request = {
-                            let mut request_storage = self.request_storage.lock().await;
-                            request_storage.take_matching_request_info(&msg).is_some()
-                        };
-
-                        // If so, we'll take their vote on our IPv4 address and mark them as verified
-                        if has_matching_request {
-                            self.ip4_vote_helper(&addr, &msg).await;
-                            let mut buckets = self.buckets.lock().await;
-                            buckets.add_or_update(Node::new(arguments.responder_id, addr), true);
-                        }
-                    }
-
-                    packets::ResponseSpecific::FindNodeResponse(arguments) => {
-                        // Does this response correspond to a request we sent recently?
-                        let has_matching_request = {
-                            let mut request_storage = self.request_storage.lock().await;
-                            request_storage.take_matching_request_info(&msg).is_some()
-                        };
-
-                        // If so, we'll take their vote on our IPv4 address, mark them as verified, and add the nodes they sent
-                        if has_matching_request {
-                            self.ip4_vote_helper(&addr, &msg).await;
-
-                            let mut buckets = self.buckets.lock().await;
-                            buckets.add_or_update(Node::new(arguments.responder_id, addr), true);
-
-                            // Add the nodes we got back as "seen" (even though we haven't necessarily seen them directly yet).
-                            // They will be pinged later in an attempt to verify them.
-                            for node in &arguments.nodes {
-                                if node.id.is_valid_for_ip(&node.address.ip()) {
-                                    buckets.add_or_update(node.clone(), false);
-                                }
+                        let reply = {
+                            let mut state = self.state.try_lock().unwrap();
+                            let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
+                            if is_id_valid {
+                                state
+                                    .buckets
+                                    .add_or_update(Node::new(arguments.requester_id, addr), false);
                             }
-                        } else {
-                            debug!(target: "rustydht_lib::DHT", "Ignoring unsolicited find_node response");
-                        }
-                    }
-                    _ => {
-                        info!(target: "rustydht_lib::DHT",
-                            "Received unsupported/unexpected KRPCResponse variant from {:?}: {:?}",
-                            addr, response_variant
-                        );
+
+                            let nearest = state.buckets.get_nearest_nodes(
+                                &arguments.target,
+                                Some(&arguments.requester_id),
+                            );
+
+                            let (info_hashes, total_info_hashes) = {
+                                let info_hashes = state.peer_storage.get_info_hashes();
+                                let total_info_hashes = info_hashes.len();
+                                let info_hashes = {
+                                    let mut rng = thread_rng();
+                                    state
+                                        .peer_storage
+                                        .get_info_hashes()
+                                        .as_mut_slice()
+                                        .partial_shuffle(
+                                            &mut rng,
+                                            state.settings.max_sample_response,
+                                        )
+                                        .0
+                                        .to_vec()
+                                };
+                                (info_hashes, total_info_hashes)
+                            };
+
+                            packets::Message::create_sample_infohashes_response(
+                                state.our_id,
+                                msg.transaction_id,
+                                addr,
+                                Duration::from_secs(
+                                    state.settings.min_sample_interval_secs.try_into().unwrap(),
+                                ),
+                                nearest,
+                                info_hashes,
+                                total_info_hashes,
+                            )
+                        };
+
+                        self.socket
+                            .send_to(reply, addr, Some(arguments.requester_id))
+                            .await?;
                     }
                 }
             }
+
+            packets::MessageType::Response(response_variant) => match response_variant {
+                _ => { /*Responses should be handled by the sender via notification channel.*/ }
+            },
             _ => {
                 warn!(target: "rustydht_lib::DHT",
                     "Received unsupported/unexpected KRPCMessage variant from {:?}: {:?}",
@@ -496,60 +474,128 @@ impl DHT {
                 );
             }
         }
+
+        {
+            // Notify any subscribers about the event
+            let event = DHTEvent {
+                event_type: DHTEventType::MessageReceived(MessageReceivedEvent {
+                    message: msg_event_clone,
+                }),
+            };
+            let mut state = self.state.lock().unwrap();
+            state.subscribers.retain(|sub| {
+                eprintln!("Gotta do notifications for {:?}", event);
+                match sub.try_send(event.clone()) {
+                    Ok(()) => true,
+                    Err(e) => match e {
+                        tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                            // Remove the sender from the subscriptions since they hung up on us (rude)
+                            trace!(target: "rustydht_lib::DHT", "Removing channel for closed DHTEvent subscriber");
+                            false
+                        }
+                        tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                            warn!(target: "rustydht_lib::DHT", "DHTEvent subscriber channel is full - can't send event {:?}", event);
+                            true
+                        }
+                    }
+                }
+            });
+        }
+
         return Ok(());
     }
 
-    /// Runs the main event loop of the DHT. Never returns!
+    /// Runs the main event loop of the DHT.
     pub async fn run_event_loop(&self) -> Result<(), RustyDHTError> {
-        if let Err(err) = tokio::try_join!(
+        match tokio::try_join!(
             // One-time
-            self.ping_routers(),
+            self.ping_routers(self.shutdown.clone()),
             // Loop indefinitely
             self.accept_incoming_packets(),
-            self.periodic_router_ping(),
-            self.periodic_buddy_ping(),
-            self.periodic_request_prune(),
-            self.periodic_find_node(),
+            self.periodic_router_ping(self.shutdown.clone()),
+            self.periodic_buddy_ping(self.shutdown.clone()),
+            self.periodic_find_node(self.shutdown.clone()),
             self.periodic_ip4_maintenance(),
             self.periodic_token_rotation(),
+            async {
+                let to_ret: Result<(), RustyDHTError> = Err(RustyDHTError::ShutdownError(anyhow!(
+                    "run_event_loop should shutdown"
+                )));
+                self.shutdown.clone().watch().await;
+                return to_ret;
+            }
         ) {
-            return Err(err);
+            Ok(_) => Ok(()),
+            Err(e) => {
+                if let RustyDHTError::ShutdownError(_) = e {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }
         }
+    }
 
-        Ok(())
+    /// Subscribe to DHTEvent notifications from the DHT.
+    pub fn subscribe(&self) -> mpsc::Receiver<DHTEvent> {
+        let (tx, rx) = mpsc::channel(32);
+        let mut state = self.state.lock().unwrap();
+        state.subscribers.push(tx);
+        rx
     }
 
     pub fn get_id(&self) -> Id {
-        self.our_id.borrow().clone()
+        self.state.try_lock().unwrap().our_id
     }
 
-    async fn periodic_buddy_ping(&self) -> Result<(), RustyDHTError> {
+    async fn periodic_buddy_ping(
+        &self,
+        shutdown: shutdown::ShutdownReceiver,
+    ) -> Result<(), RustyDHTError> {
         loop {
-            sleep(Duration::from_secs(self.settings.ping_check_interval_secs)).await;
-            let mut buckets = self.buckets.lock().await;
-            let count = buckets.count();
-            debug!(target: "rustydht_lib::DHT",
-                "Pruning node buckets. Storage has {} unverified, {} verified in {} buckets",
-                count.0,
-                count.1,
-                buckets.count_buckets()
-            );
-            buckets.prune(
-                Duration::from_secs(self.settings.reverify_grace_period_secs),
-                Duration::from_secs(self.settings.verify_grace_period_secs),
-            );
+            let ping_check_interval_secs = self
+                .state
+                .try_lock()
+                .unwrap()
+                .settings
+                .ping_check_interval_secs;
+            sleep(Duration::from_secs(ping_check_interval_secs)).await;
 
-            match Instant::now()
-                .checked_sub(Duration::from_secs(self.settings.reverify_interval_secs))
-            {
+            // Package things that need state into a block so that Rust will not complain about MutexGuard kept past .await
+            let reverify_interval_secs = {
+                let mut state = self.state.try_lock().unwrap();
+                let count = state.buckets.count();
+                debug!(target: "rustydht_lib::DHT",
+                    "Pruning node buckets. Storage has {} unverified, {} verified in {} buckets",
+                    count.0,
+                    count.1,
+                    state.buckets.count_buckets()
+                );
+                let reverify_grace_period_secs = state.settings.reverify_grace_period_secs;
+                let verify_grace_period_secs = state.settings.verify_grace_period_secs;
+                state.buckets.prune(
+                    Duration::from_secs(reverify_grace_period_secs),
+                    Duration::from_secs(verify_grace_period_secs),
+                );
+
+                state.settings.reverify_interval_secs
+            };
+            match Instant::now().checked_sub(Duration::from_secs(reverify_interval_secs)) {
                 None => {
                     debug!(target: "rustydht_lib::DHT", "Monotonic clock underflow - skipping this round of pings");
                 }
 
                 Some(ping_if_older_than) => {
                     debug!(target: "rustydht_lib::DHT", "Sending pings to all nodes that have never verified or haven't been verified in a while");
+                    let (unverified, verified) = {
+                        let state = self.state.lock().unwrap();
+                        (
+                            state.buckets.get_all_unverified(),
+                            state.buckets.get_all_verified(),
+                        )
+                    };
                     // Ping everybody we haven't verified
-                    for wrapper in buckets.get_all_unverified() {
+                    for wrapper in unverified {
                         // Some things in here are actually verified... don't bother them too often
                         if let Some(last_verified) = wrapper.last_verified {
                             if last_verified >= ping_if_older_than {
@@ -563,50 +609,84 @@ impl DHT {
                                 (Instant::now() - wrapper.last_seen).as_secs()
                             );
                         }
-                        self.ping(wrapper.node.address).await?;
+                        let shutdown_clone = shutdown.clone();
+                        self.ping_internal(
+                            shutdown_clone,
+                            wrapper.node.address,
+                            Some(wrapper.node.id),
+                        )
+                        .await?;
                     }
 
                     // Reverify those who haven't been verified recently
-                    for wrapper in buckets.get_all_verified() {
+                    for wrapper in verified {
                         if let Some(last_verified) = wrapper.last_verified {
                             if last_verified >= ping_if_older_than {
                                 continue;
                             }
                         }
+                        let shutdown_clone = shutdown.clone();
                         trace!(target: "rustydht_lib::DHT", "Sending ping to reverify {:?}", wrapper.node);
-                        self.ping(wrapper.node.address).await?;
+                        self.ping_internal(
+                            shutdown_clone,
+                            wrapper.node.address,
+                            Some(wrapper.node.id),
+                        )
+                        .await?;
                     }
                 }
             }
         }
     }
 
-    async fn periodic_find_node(&self) -> Result<(), RustyDHTError> {
+    async fn periodic_find_node(
+        &self,
+        shutdown: shutdown::ShutdownReceiver,
+    ) -> Result<(), RustyDHTError> {
         loop {
-            sleep(Duration::from_secs(self.settings.find_nodes_interval_secs)).await;
+            let find_node_interval_secs = self
+                .state
+                .try_lock()
+                .unwrap()
+                .settings
+                .find_nodes_interval_secs;
+            sleep(Duration::from_secs(find_node_interval_secs)).await;
 
-            {
-                let buckets = self.buckets.lock().await;
-                let (count_unverified, count_verified) = buckets.count();
+            let (count_unverified, count_verified) = self.state.try_lock().unwrap().buckets.count();
 
-                // If we don't know anybody, force a router ping.
-                // This is helpful if we've been asleep for a while and lost all peers
-                if count_verified <= 0 {
-                    self.ping_routers().await?;
-                }
+            // If we don't know anybody, force a router ping.
+            // This is helpful if we've been asleep for a while and lost all peers
+            if count_verified <= 0 {
+                let shutdown_clone = shutdown.clone();
+                self.ping_routers(shutdown_clone).await?;
+            }
 
-                if count_unverified > self.settings.find_nodes_skip_count {
+            // Package things that need state into this block to avoid issues with MutexGuard kept over .await
+            let (nearest_nodes, id_near_us) = {
+                let state = self.state.try_lock().unwrap();
+                if count_unverified > state.settings.find_nodes_skip_count {
                     debug!(target: "rustydht_lib::DHT", "Skipping find_node as we already have enough unverified");
                     continue;
                 }
+
+                let id_near_us = state.our_id.make_mutant();
+
+                // Find the closest nodes to ask
+                (
+                    state.buckets.get_nearest_nodes(&id_near_us, None),
+                    id_near_us,
+                )
+            };
+            trace!(
+                target: "rustydht_lib::DHT",
+                "Sending find_node to {} nodes about {:?}",
+                nearest_nodes.len(),
+                id_near_us
+            );
+            for node in nearest_nodes {
+                self.find_node_internal(shutdown.clone(), node.address, id_near_us)
+                    .await?;
             }
-
-            // Search a random node to get diversity
-            // let rando =  MainlineId::from_random();
-            let near_us = self.our_id.borrow().make_mutant();
-
-            // self.send_find_node(&rando).await?;
-            self.send_find_node(near_us).await?;
         }
     }
 
@@ -614,48 +694,41 @@ impl DHT {
         loop {
             sleep(Duration::from_secs(10)).await;
 
-            let mut ip4_source = self.ip4_source.lock().await;
-            ip4_source.decay();
+            let mut state = self.state.try_lock().unwrap();
+            state.ip4_source.decay();
 
-            if let Some(ip) = ip4_source.get_best_ipv4() {
+            if let Some(ip) = state.ip4_source.get_best_ipv4() {
                 let ip = IpAddr::V4(ip);
-                if !self.our_id.borrow().is_valid_for_ip(&ip) {
+                if !state.our_id.is_valid_for_ip(&ip) {
                     let new_id = Id::from_ip(&ip);
                     info!(target: "rustydht_lib::DHT",
                         "Our current id {} is not valid for IP {}. Using new id {}",
-                        self.our_id.borrow(),
+                        state.our_id,
                         ip,
                         new_id
                     );
-                    self.our_id.replace(new_id);
-                    self.buckets.lock().await.set_id(new_id);
+                    state.our_id = new_id;
+                    state.buckets.set_id(new_id);
                 }
             }
         }
     }
 
-    async fn periodic_request_prune(&self) -> Result<(), RustyDHTError> {
+    async fn periodic_router_ping(
+        &self,
+        shutdown: shutdown::ShutdownReceiver,
+    ) -> Result<(), RustyDHTError> {
         loop {
-            sleep(Duration::from_secs(
-                self.settings.outgoing_reqiest_check_interval_secs,
-            ))
-            .await;
-            let mut request_storage = self.request_storage.lock().await;
-            debug!(target: "rustydht_lib::DHT",
-                "Time to prune request storage (size {})",
-                request_storage.len()
-            );
-            request_storage.prune_older_than(Duration::from_secs(
-                self.settings.outgoing_request_prune_secs,
-            ));
-        }
-    }
-
-    async fn periodic_router_ping(&self) -> Result<(), RustyDHTError> {
-        loop {
-            sleep(Duration::from_secs(self.settings.router_ping_interval_secs)).await;
+            let router_ping_interval_secs = self
+                .state
+                .try_lock()
+                .unwrap()
+                .settings
+                .router_ping_interval_secs;
+            sleep(Duration::from_secs(router_ping_interval_secs)).await;
             debug!(target: "rustydht_lib::DHT", "Pinging routers");
-            self.ping_routers().await?;
+            let shutdown_clone = shutdown.clone();
+            self.ping_routers(shutdown_clone).await?;
         }
     }
 
@@ -666,18 +739,89 @@ impl DHT {
         }
     }
 
-    async fn ping(&self, target: SocketAddr) -> Result<(), RustyDHTError> {
-        let req = packets::Message::create_ping_request(*self.our_id.borrow());
-        let req_bytes = req.clone().to_bytes()?;
-        self.request_storage
-            .lock()
-            .await
-            .add_request(RequestInfo::new(target, None, req));
-        self.send_to(&req_bytes, target).await?;
+    /// Helper function for internal use. Spawns a new task and does a ping from there, with timeout.
+    async fn ping_internal(
+        &self,
+        shutdown: shutdown::ShutdownReceiver,
+        target: SocketAddr,
+        target_id: Option<Id>,
+    ) -> Result<(), RustyDHTError> {
+        let state = self.state.clone();
+        let socket = self.socket.clone();
+        shutdown::ShutdownReceiver::spawn_with_shutdown(
+            shutdown,
+            DHT::ping_impl(state, socket, target, target_id),
+            format!("ping to {}", target),
+            Some(Duration::from_secs(5)),
+        );
         Ok(())
     }
 
-    async fn ping_router<G: AsRef<str>>(&self, hostname: G) -> Result<(), RustyDHTError> {
+    pub async fn ping(
+        &self,
+        target: SocketAddr,
+        target_id: Option<Id>,
+    ) -> Result<packets::Message, RustyDHTError> {
+        let state = self.state.clone();
+        let socket = self.socket.clone();
+        DHT::ping_impl(state, socket, target, target_id).await
+    }
+
+    async fn ping_impl(
+        state: Arc<Mutex<DHTState>>,
+        socket: Arc<DHTSocket>,
+        target: SocketAddr,
+        target_id: Option<Id>,
+    ) -> Result<packets::Message, RustyDHTError> {
+        let our_id = {
+            let state = state.try_lock().unwrap();
+            state.our_id
+        };
+        let req = packets::Message::create_ping_request(our_id);
+        let mut reply_channel = socket
+            .send_to(req, target, target_id)
+            .await?
+            .expect("Didn't receive reply notification channel");
+
+        match reply_channel.recv().await {
+            Some(reply) => {
+                match &reply.message_type {
+                    packets::MessageType::Response(response_variant) => {
+                        match response_variant {
+                            packets::ResponseSpecific::PingResponse(arguments) => {
+                                let is_id_valid =
+                                    arguments.responder_id.is_valid_for_ip(&target.ip());
+                                if !is_id_valid {
+                                    return Ok(reply);
+                                }
+
+                                let mut state = state.try_lock().unwrap();
+                                // If so, we'll take their vote on our IPv4 address and mark them as verified
+                                DHT::ip4_vote_helper(&mut state, &target, &reply);
+                                state
+                                    .buckets
+                                    .add_or_update(Node::new(arguments.responder_id, target), true);
+                                Ok(reply)
+                            }
+                            _ => Err(RustyDHTError::GeneralError(anyhow!(
+                                "Invalid response to ping"
+                            ))),
+                        }
+                    }
+                    _ => Err(RustyDHTError::GeneralError(anyhow!(
+                        "Invalid response to ping"
+                    ))),
+                }
+            }
+            None => Err(RustyDHTError::GeneralError(anyhow!("sender hung up!?"))),
+        }
+    }
+
+    async fn ping_router<G: AsRef<str>>(
+        &self,
+        shutdown: shutdown::ShutdownReceiver,
+        hostname: G,
+    ) -> Result<(), RustyDHTError> {
         let hostname = hostname.as_ref();
         // Resolve and add to request storage
         let resolve = lookup_host(hostname).await;
@@ -691,21 +835,13 @@ impl DHT {
                 hostname, err
             );
             return Ok(());
-            /*
-            if let Some(errno) = err.raw_os_error() {
-                // For windows
-                if errno == 11001 {
-                    warn!(target: "rustydht_lib::DHT", "Failed to resolve host {}. Try again later.", hostname);
-                    return Ok(());
-                }
-            }
-            return Err(err.into());
-            */
         }
 
         for socket_addr in resolve.unwrap() {
             if socket_addr.is_ipv4() {
-                self.ping(socket_addr).await?;
+                let shutdown_clone = shutdown.clone();
+                self.ping_internal(shutdown_clone, socket_addr, None)
+                    .await?;
                 break;
             }
         }
@@ -713,10 +849,15 @@ impl DHT {
     }
 
     /// Pings some bittorrent routers
-    async fn ping_routers(&self) -> Result<(), RustyDHTError> {
+    async fn ping_routers(
+        &self,
+        shutdown: shutdown::ShutdownReceiver,
+    ) -> Result<(), RustyDHTError> {
         let mut futures = futures::stream::FuturesUnordered::new();
-        for hostname in &self.routers {
-            futures.push(self.ping_router(hostname));
+        let routers = self.state.try_lock().unwrap().routers.clone();
+        for hostname in routers {
+            let shutdown_clone = shutdown.clone();
+            futures.push(self.ping_router(shutdown_clone, hostname));
         }
         while let Some(result) = futures.next().await {
             result?;
@@ -725,63 +866,96 @@ impl DHT {
     }
 
     fn rotate_token_secrets(&self) {
-        let token_secret = make_token_secret(self.settings.token_secret_size);
+        let mut state = self.state.try_lock().unwrap();
+        let new_token_secret = make_token_secret(state.settings.token_secret_size);
 
-        *self.old_token_secret.borrow_mut() = self.token_secret.take();
-        *self.token_secret.borrow_mut() = token_secret;
+        state.old_token_secret = state.token_secret.clone();
+        state.token_secret = new_token_secret;
         debug!(
             target: "rustydht_lib::DHT",
             "Rotating token secret. New secret is {:?}, old secret is {:?}",
-            self.token_secret.borrow(),
-            self.old_token_secret.borrow()
+            state.token_secret,
+            state.old_token_secret
         );
     }
 
-    async fn send_find_node(&self, target_id: Id) -> Result<(), RustyDHTError> {
-        let buckets = self.buckets.lock().await;
-        let mut request_storage = self.request_storage.lock().await;
-
-        // Find the closest nodes to ask
-        let nearest = buckets.get_nearest_nodes(&target_id, None);
-        trace!(
-            target: "rustydht_lib::DHT",
-            "Sending find_node to {} nodes about {:?}",
-            nearest.len(),
-            target_id
+    async fn find_node_internal(
+        &self,
+        shutdown: shutdown::ShutdownReceiver,
+        target: SocketAddr,
+        target_id: Id,
+    ) -> Result<(), RustyDHTError> {
+        let state = self.state.clone();
+        let socket = self.socket.clone();
+        shutdown::ShutdownReceiver::spawn_with_shutdown(
+            shutdown,
+            DHT::find_node_impl(state, socket, target, target_id),
+            format!("find_node to {} for {}", target, target_id),
+            Some(Duration::from_secs(5)),
         );
-        for node in nearest {
-            let req = packets::Message::create_find_node_request(*self.our_id.borrow(), target_id);
-            let bytes = req.clone().to_bytes()?;
-
-            let request_info = RequestInfo::new(node.address, Some(node.id), req);
-            request_storage.add_request(request_info);
-            self.send_to(&bytes, node.address).await?;
-        }
         Ok(())
     }
 
-    async fn send_to(&self, bytes: &Vec<u8>, dest: SocketAddr) -> Result<(), RustyDHTError> {
-        match self.socket.send_to(bytes, dest).await {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                #[cfg(target_os = "linux")]
-                if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    warn!(target: "rustydht_lib::DHT", "send_to resulted in PermissionDenied. Is conntrack table full?");
-                    return Ok(());
+    pub async fn find_node(
+        &self,
+        target: SocketAddr,
+        target_id: Id,
+    ) -> Result<packets::Message, RustyDHTError> {
+        let state = self.state.clone();
+        let socket = self.socket.clone();
+        DHT::find_node_impl(state, socket, target, target_id).await
+    }
+
+    async fn find_node_impl(
+        state: Arc<Mutex<DHTState>>,
+        socket: Arc<DHTSocket>,
+        target: SocketAddr,
+        target_id: Id,
+    ) -> Result<packets::Message, RustyDHTError> {
+        let our_id = state.try_lock().unwrap().our_id;
+        let req = packets::Message::create_find_node_request(our_id, target_id);
+        let mut reply_channel = socket
+            .send_to(req, target, Some(target_id))
+            .await?
+            .expect("Didn't receive reply notification channel");
+
+        match reply_channel.recv().await {
+            Some(reply) => {
+                if let packets::MessageType::Response(
+                    packets::ResponseSpecific::FindNodeResponse(arguments),
+                ) = &reply.message_type
+                {
+                    let mut state = state.try_lock().unwrap();
+                    DHT::ip4_vote_helper(&mut state, &target, &reply);
+                    state
+                        .buckets
+                        .add_or_update(Node::new(arguments.responder_id, target), true);
+
+                    // Add the nodes we got back as "seen" (even though we haven't necessarily seen them directly yet).
+                    // They will be pinged later in an attempt to verify them.
+                    for node in &arguments.nodes {
+                        if node.id.is_valid_for_ip(&node.address.ip()) {
+                            state.buckets.add_or_update(node.clone(), false);
+                        }
+                    }
+                    Ok(reply)
+                } else {
+                    Err(RustyDHTError::GeneralError(anyhow!(
+                        "Invalid response to find_node"
+                    )))
                 }
-                Err(RustyDHTError::GeneralError(e.into()))
             }
+            None => Err(RustyDHTError::GeneralError(anyhow!("sender hung up!?"))),
         }
     }
 
     /// Adds a 'vote' for whatever IP address the sender says we have.
-    async fn ip4_vote_helper(&self, addr: &SocketAddr, msg: &packets::Message) {
+    fn ip4_vote_helper(state: &mut DHTState, addr: &SocketAddr, msg: &packets::Message) {
         if let IpAddr::V4(their_ip) = addr.ip() {
             if let Some(they_claim_our_sockaddr) = &msg.requester_ip {
                 if let SocketAddr::V4(they_claim_our_sockaddr) = they_claim_our_sockaddr {
-                    self.ip4_source
-                        .lock()
-                        .await
+                    state
+                        .ip4_source
                         .add_vote(their_ip, they_claim_our_sockaddr.ip().clone());
                 }
             }
@@ -818,12 +992,34 @@ mod test {
     use super::*;
     use crate::common::ipv4_addr_src::StaticIPV4AddrSource;
     use anyhow::anyhow;
-    use lazy_static::lazy_static;
     use std::boxed::Box;
 
-    // Tests reuse the same UDP port. This mutex is used to serialize tests that need the UDP port.
-    lazy_static! {
-        static ref LOCK: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+    async fn make_test_dht(
+        port: u16,
+    ) -> (DHT, shutdown::ShutdownSender, shutdown::ShutdownReceiver) {
+        let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
+        let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
+        let buckets = |id| -> Box<dyn NodeStorage + Send> {
+            Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
+                id, 8,
+            ))
+        };
+        let (tx, rx) = shutdown::create_shutdown();
+        (
+            DHT::new(
+                rx.clone(),
+                Some(get_dht_id()),
+                port,
+                phony_ip4,
+                buckets,
+                &[],
+                DHTSettings::default(),
+            )
+            .await
+            .unwrap(),
+            tx,
+            rx,
+        )
     }
 
     #[tokio::test]
@@ -831,11 +1027,18 @@ mod test {
         let requester_id = Id::from_random(&mut thread_rng());
         let ping_request = packets::Message::create_ping_request(requester_id);
 
-        let res = tokio::try_join!(
-            accept_single_packet(),
-            send_and_receive(ping_request.clone()),
-        )
-        .map(|res| res.1)?;
+        let port = 1948;
+        let (dht, mut shutdown_tx, shutdown_rx) = make_test_dht(port).await;
+        shutdown::ShutdownReceiver::spawn_with_shutdown(
+            shutdown_rx,
+            async move {
+                dht.run_event_loop().await.unwrap();
+            },
+            "Test DHT",
+            Some(Duration::from_secs(10)),
+        );
+
+        let res = send_and_receive(ping_request.clone(), port).await.unwrap();
 
         assert_eq!(res.transaction_id, ping_request.transaction_id);
         assert_eq!(
@@ -847,6 +1050,8 @@ mod test {
             ))
         );
 
+        shutdown_tx.shutdown().await;
+
         Ok(())
     }
 
@@ -856,8 +1061,18 @@ mod test {
         let desired_info_hash = Id::from_random(&mut thread_rng());
         let request = packets::Message::create_get_peers_request(requester_id, desired_info_hash);
 
-        let res = tokio::try_join!(accept_single_packet(), send_and_receive(request.clone()))
-            .map(|res| res.1)?;
+        let port = 1974;
+        let (dht, mut shutdown_tx, shutdown_rx) = make_test_dht(port).await;
+        shutdown::ShutdownReceiver::spawn_with_shutdown(
+            shutdown_rx,
+            async move {
+                dht.run_event_loop().await.unwrap();
+            },
+            "Test DHT",
+            Some(Duration::from_secs(10)),
+        );
+
+        let res = send_and_receive(request.clone(), port).await.unwrap();
 
         assert_eq!(res.transaction_id, request.transaction_id);
         assert!(matches!(
@@ -867,17 +1082,28 @@ mod test {
             ))
         ));
 
+        shutdown_tx.shutdown().await;
+
         Ok(())
     }
 
     #[tokio::test]
     async fn test_responds_to_find_node() -> Result<(), RustyDHTError> {
+        let port = 1995;
+        let (dht, mut shutdown_tx, shutdown_rx) = make_test_dht(port).await;
+        shutdown::ShutdownReceiver::spawn_with_shutdown(
+            shutdown_rx,
+            async move {
+                dht.run_event_loop().await.unwrap();
+            },
+            "Test DHT",
+            Some(Duration::from_secs(10)),
+        );
+
         let requester_id = Id::from_random(&mut thread_rng());
         let target = Id::from_random(&mut thread_rng());
         let request = packets::Message::create_find_node_request(requester_id, target);
-
-        let res = tokio::try_join!(accept_single_packet(), send_and_receive(request.clone()))
-            .map(|res| res.1)?;
+        let res = send_and_receive(request.clone(), port).await.unwrap();
 
         assert_eq!(res.transaction_id, request.transaction_id);
         assert!(matches!(
@@ -887,6 +1113,8 @@ mod test {
             ))
         ));
 
+        shutdown_tx.shutdown().await;
+
         Ok(())
     }
 
@@ -894,18 +1122,87 @@ mod test {
     async fn test_responds_to_announce_peer() -> Result<(), RustyDHTError> {
         let requester_id = Id::from_random(&mut thread_rng());
         let info_hash = Id::from_random(&mut thread_rng());
-        let res = tokio::try_join!(
-            accept_packets(2),
-            get_token_announce_peer(requester_id, info_hash)
-        )
-        .map(|res| res.1)?;
+        let port = 2014;
+        let (dht, mut shutdown_tx, shutdown_rx) = make_test_dht(port).await;
+        shutdown::ShutdownReceiver::spawn_with_shutdown(
+            shutdown_rx,
+            async move {
+                dht.run_event_loop().await.unwrap();
+            },
+            "Test DHT",
+            Some(Duration::from_secs(10)),
+        );
 
+        // Send a get_peers request and get the response
+        let reply = send_and_receive(
+            packets::Message::create_get_peers_request(requester_id, info_hash),
+            port,
+        )
+        .await
+        .unwrap();
+
+        // Extract the token from the get_peers response
+        let token = {
+            if let packets::MessageType::Response(packets::ResponseSpecific::GetPeersResponse(
+                packets::GetPeersResponseArguments { token, .. },
+            )) = reply.message_type
+            {
+                token
+            } else {
+                return Err(RustyDHTError::GeneralError(anyhow!("Didn't get token")));
+            }
+        };
+
+        // Send an announce_peer request and get the response
+        let reply = send_and_receive(
+            packets::Message::create_announce_peer_request(
+                requester_id,
+                info_hash,
+                1234,
+                false,
+                token,
+            ),
+            port,
+        )
+        .await
+        .unwrap();
+
+        // The response must be a ping response
         assert!(matches!(
-            res.message_type,
+            reply.message_type,
             packets::MessageType::Response(packets::ResponseSpecific::PingResponse(
                 packets::PingResponseArguments { .. }
             ))
         ));
+
+        // Send get peers again - this time we'll get a peer back (ourselves)
+        let reply = send_and_receive(
+            packets::Message::create_get_peers_request(requester_id, info_hash),
+            port,
+        )
+        .await
+        .unwrap();
+
+        eprintln!("Received {:?}", reply);
+
+        // Make sure we got a peer back
+        let peers = {
+            if let packets::MessageType::Response(packets::ResponseSpecific::GetPeersResponse(
+                packets::GetPeersResponseArguments {
+                    values: packets::GetPeersResponseValues::Peers(p),
+                    ..
+                },
+            )) = reply.message_type
+            {
+                p
+            } else {
+                return Err(RustyDHTError::GeneralError(anyhow!("Didn't get peers")));
+            }
+        };
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].port(), 1234);
+        eprintln!("all good!");
+        shutdown_tx.shutdown().await;
 
         Ok(())
     }
@@ -916,8 +1213,18 @@ mod test {
         let target = Id::from_random(&mut thread_rng());
         let request = packets::Message::create_sample_infohashes_request(requester_id, target);
 
-        let res = tokio::try_join!(accept_single_packet(), send_and_receive(request.clone()))
-            .map(|res| res.1)?;
+        let port = 2037;
+        let (dht, mut shutdown_tx, shutdown_rx) = make_test_dht(port).await;
+        shutdown::ShutdownReceiver::spawn_with_shutdown(
+            shutdown_rx,
+            async move {
+                dht.run_event_loop().await.unwrap();
+            },
+            "Test DHT",
+            Some(Duration::from_secs(10)),
+        );
+
+        let res = send_and_receive(request.clone(), port).await.unwrap();
 
         assert_eq!(res.transaction_id, request.transaction_id);
         assert!(matches!(
@@ -927,197 +1234,83 @@ mod test {
             ))
         ));
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_handles_ping_response() -> Result<(), RustyDHTError> {
-        let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
-        let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
-        let buckets = |id| -> Box<dyn NodeStorage> {
-            Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
-                id, 8,
-            ))
-        };
-        let _lock = LOCK.lock();
-        let dht = DHT::new(
-            Some(get_dht_id()),
-            10001,
-            phony_ip4,
-            buckets,
-            &[],
-            DHTSettings::default(),
-        )
-        .await
-        .unwrap();
-
-        let server_id = dht.our_id.borrow().clone();
-
-        let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let client_addr = client_socket.local_addr().unwrap();
-        let client_id = Id::from_random(&mut thread_rng());
-        let req = packets::Message::create_ping_request(server_id);
-        {
-            let mut request_storage = dht.request_storage.lock().await;
-            request_storage.add_request(RequestInfo::new(client_addr, None, req.clone()));
-        }
-
-        let res = packets::Message::create_ping_response(
-            client_id,
-            req.transaction_id,
-            "127.0.0.1:10001".parse().unwrap(),
-        );
-
-        let mut throttler = crate::storage::throttler::Throttler::new(
-            100,
-            Duration::from_secs(1),
-            Duration::from_secs(1),
-            Duration::from_secs(100),
-        );
-        let mut recv_buf = [0; 2048];
-
-        tokio::try_join!(
-            dht.accept_single_packet(&mut throttler, &mut recv_buf),
-            send_only(res)
-        )?;
-
-        let num_verified = {
-            let buckets = dht.buckets.lock().await;
-            let verified = buckets.get_all_verified();
-            verified.len()
-        };
-        assert_eq!(num_verified, 1);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_handles_find_node_response() -> Result<(), RustyDHTError> {
-        let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
-        let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
-        let buckets = |id| -> Box<dyn NodeStorage> {
-            Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
-                id, 8,
-            ))
-        };
-        let _lock = LOCK.lock();
-        let dht = DHT::new(
-            Some(get_dht_id()),
-            10001,
-            phony_ip4,
-            buckets,
-            &[],
-            DHTSettings::default(),
-        )
-        .await
-        .unwrap();
-
-        let server_id = dht.our_id.borrow().clone();
-
-        let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let client_addr = client_socket.local_addr().unwrap();
-        let client_id = Id::from_random(&mut thread_rng());
-        let req = packets::Message::create_find_node_request(
-            server_id,
-            Id::from_random(&mut thread_rng()),
-        );
-        {
-            let mut request_storage = dht.request_storage.lock().await;
-            request_storage.add_request(RequestInfo::new(client_addr, None, req.clone()));
-        }
-
-        let returned_node_id = Id::from_random(&mut thread_rng());
-        let res = packets::Message::create_find_node_response(
-            client_id,
-            req.transaction_id,
-            "127.0.0.1:10001".parse().unwrap(),
-            vec![Node::new(
-                returned_node_id,
-                "127.0.0.2:5050".parse().unwrap(),
-            )],
-        );
-
-        let mut throttler = crate::storage::throttler::Throttler::new(
-            100,
-            Duration::from_secs(1),
-            Duration::from_secs(1),
-            Duration::from_secs(100),
-        );
-        let mut recv_buf = [0; 2048];
-
-        tokio::try_join!(
-            dht.accept_single_packet(&mut throttler, &mut recv_buf),
-            send_only(res)
-        )?;
-
-        let buckets = dht.buckets.lock().await;
-        let verified = buckets.get_all_verified();
-        let unverified = buckets.get_all_unverified();
-        assert_eq!(verified.len(), 1);
-        assert_eq!(verified[0].node.id, client_id);
-        assert_eq!(unverified.len(), 1);
+        shutdown_tx.shutdown().await;
 
         Ok(())
     }
 
     #[tokio::test]
     async fn test_event_loop_pings_routers() {
-        let router_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let router_addr = router_socket.local_addr().unwrap();
-        let router_id = Id::from_random(&mut thread_rng());
-
-        let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
-        let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
-        let buckets = |id| -> Box<dyn NodeStorage> {
-            Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
-                id, 8,
-            ))
-        };
-        let mut settings = DHTSettings::default();
-        settings.router_ping_interval_secs = 1;
-        let _lock = LOCK.lock();
-        let dht = DHT::new(
-            Some(get_dht_id()),
-            10001,
-            phony_ip4,
-            buckets,
-            &[&router_addr.to_string()],
-            DHTSettings::default(),
-        )
-        .await
-        .unwrap();
-
-        tokio::select! {
-            _ = dht.run_event_loop() => {}
-            _ = async {
-                let mut recv_buf = [0; 2048];
-                let (num_read, remote) = router_socket.recv_from(&mut recv_buf).await.unwrap();
-                let msg = packets::Message::from_bytes(&recv_buf[..num_read]).unwrap();
-                assert!(matches!(
-                    msg.message_type,
-                    packets::MessageType::Request(packets::RequestSpecific::PingRequest(
-                        packets::PingRequestArguments { .. }
+        let (mut shutdown_tx, shutdown_rx) = shutdown::create_shutdown();
+        let port1 = 2171;
+        let dht1 = Arc::new(
+            DHT::new(
+                shutdown_rx.clone(),
+                Some(get_dht_id()),
+                port1,
+                Box::new(StaticIPV4AddrSource::new(Ipv4Addr::new(1, 2, 3, 4))),
+                |id| -> Box<dyn NodeStorage + Send> {
+                    Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
+                        id, 8,
                     ))
-                ));
+                },
+                &[],
+                DHTSettings::default(),
+            )
+            .await
+            .unwrap(),
+        );
 
-                let res =
-                    packets::Message::create_ping_response(router_id, msg.transaction_id, remote);
-                router_socket
-                    .send_to(&res.to_bytes().unwrap(), remote)
-                    .await
-                    .expect("Failed to send_to");
-
-                // Send our own ping and await the response - this is used instead of a hacky timer to know when the DHT has processed our response
-                let req = packets::Message::create_ping_request(router_id);
-                router_socket
-                    .send_to(&req.to_bytes().unwrap(), remote)
-                    .await
-                    .expect("Failed to send_to");
-                router_socket.recv_from(&mut recv_buf).await.unwrap();
-            } => {}
+        let port2 = 2186;
+        let settings2 = {
+            let mut s = DHTSettings::default();
+            s.router_ping_interval_secs = 1;
+            s
         };
+        let dht2 = Arc::new(
+            DHT::new(
+                shutdown_rx.clone(),
+                Some(get_dht_id().make_mutant()),
+                port2,
+                Box::new(StaticIPV4AddrSource::new(Ipv4Addr::new(1, 2, 3, 4))),
+                |id| -> Box<dyn NodeStorage + Send> {
+                    Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
+                        id, 8,
+                    ))
+                },
+                &[&format!("127.0.0.1:{}", port1)],
+                settings2,
+            )
+            .await
+            .unwrap(),
+        );
 
-        let (unverified, verified) = dht.buckets.lock().await.count();
+        let mut receiver = dht2.subscribe();
+
+        shutdown::ShutdownReceiver::spawn_with_shutdown(
+            shutdown_rx.clone(),
+            async move {
+                dht1.run_event_loop().await.unwrap();
+            },
+            "DHT1",
+            None,
+        );
+
+        let dht2_clone = dht2.clone();
+        shutdown::ShutdownReceiver::spawn_with_shutdown(
+            shutdown_rx,
+            async move { dht2_clone.run_event_loop().await.unwrap() },
+            "DHT2",
+            None,
+        );
+
+        receiver.recv().await;
+        let (unverified, verified) = dht2.state.try_lock().unwrap().buckets.count();
+
+        // Must drop dht2 as it contains a ShutdownReceiver channel which will block shutdown
+        drop(dht2);
+
+        shutdown_tx.shutdown().await;
         assert_eq!(unverified, 0);
         assert_eq!(verified, 1);
     }
@@ -1126,15 +1319,16 @@ mod test {
     async fn test_token_secret_rotation() {
         let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
         let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
-        let buckets = |id| -> Box<dyn NodeStorage> {
+        let buckets = |id| -> Box<dyn NodeStorage + Send> {
             Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
                 id, 8,
             ))
         };
-        let _lock = LOCK.lock();
+        let port = 2244;
         let dht = DHT::new(
+            shutdown::create_shutdown().1,
             Some(get_dht_id()),
-            10001,
+            port,
             phony_ip4,
             buckets,
             &[],
@@ -1144,20 +1338,22 @@ mod test {
         .unwrap();
 
         assert_eq!(
-            dht.token_secret.borrow().len(),
+            dht.state.try_lock().unwrap().token_secret.len(),
             DHTSettings::default().token_secret_size
         );
 
         dht.rotate_token_secrets();
         assert_eq!(
-            dht.old_token_secret.borrow().len(),
+            dht.state.try_lock().unwrap().old_token_secret.len(),
             DHTSettings::default().token_secret_size
         );
         assert_eq!(
-            dht.token_secret.borrow().len(),
+            dht.state.try_lock().unwrap().token_secret.len(),
             DHTSettings::default().token_secret_size
         );
-        assert_ne!(*dht.old_token_secret.borrow(), *dht.token_secret.borrow());
+
+        let state = dht.state.try_lock().unwrap();
+        assert_ne!(state.old_token_secret, state.token_secret);
     }
 
     // Dumb helper function because we can't declare a const or static Id
@@ -1165,88 +1361,20 @@ mod test {
         Id::from_hex("0011223344556677889900112233445566778899").unwrap()
     }
 
-    // Helper function for test_announce_peer. When will async closure be stable!?
-    async fn get_token_announce_peer(
-        requester_id: Id,
-        info_hash: Id,
+    // Helper function that sends a single packet to the test DHT and then returns the response
+    async fn send_and_receive(
+        msg: packets::Message,
+        port: u16,
     ) -> Result<packets::Message, RustyDHTError> {
-        let req = packets::Message::create_get_peers_request(requester_id, info_hash);
-        let res = send_and_receive(req).await?;
-
-        if let packets::MessageType::Response(packets::ResponseSpecific::GetPeersResponse(
-            packets::GetPeersResponseArguments { token, .. },
-        )) = res.message_type
-        {
-            let req = packets::Message::create_announce_peer_request(
-                requester_id,
-                info_hash,
-                1234,
-                true,
-                token,
-            );
-            send_and_receive(req).await
-        } else {
-            Err(RustyDHTError::GeneralError(anyhow!("Wrong packet")))
-        }
-    }
-
-    // Helper function that creates a test DHT, handles a single packet, and returns
-    async fn accept_single_packet() -> Result<(), RustyDHTError> {
-        accept_packets(1).await
-    }
-
-    // Helper function creates test DHT, handles given number of packets, and returns
-    async fn accept_packets(num: usize) -> Result<(), RustyDHTError> {
-        let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
-        let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
-        let buckets = |id| -> Box<dyn NodeStorage> {
-            Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
-                id, 8,
-            ))
-        };
-        let _lock = LOCK.lock();
-        let dht = DHT::new(
-            Some(get_dht_id()),
-            10001,
-            phony_ip4,
-            buckets,
-            &[],
-            DHTSettings::default(),
+        let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        sock.send_to(
+            &msg.clone().to_bytes().unwrap(),
+            format!("127.0.0.1:{}", port),
         )
         .await
         .unwrap();
-
-        let mut throttler = crate::storage::throttler::Throttler::new(
-            100,
-            Duration::from_secs(1),
-            Duration::from_secs(1),
-            Duration::from_secs(100),
-        );
-        let mut recv_buf = [0; 2048];
-
-        for _ in 0..num {
-            dht.accept_single_packet(&mut throttler, &mut recv_buf)
-                .await?;
-        }
-        Ok(())
-    }
-
-    // Helper function that sends a single packet to the test DHT and then returns the response
-    async fn send_and_receive(msg: packets::Message) -> Result<packets::Message, RustyDHTError> {
-        let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        sock.send_to(&msg.clone().to_bytes().unwrap(), "127.0.0.1:10001")
-            .await
-            .unwrap();
         let mut recv_buf = [0; 2048];
         let num_read = sock.recv_from(&mut recv_buf).await.unwrap().0;
         packets::Message::from_bytes(&recv_buf[..num_read])
-    }
-
-    async fn send_only(msg: packets::Message) -> Result<(), RustyDHTError> {
-        let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        sock.send_to(&msg.clone().to_bytes().unwrap(), "127.0.0.1:10001")
-            .await
-            .unwrap();
-        Ok(())
     }
 }

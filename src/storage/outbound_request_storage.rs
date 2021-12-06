@@ -6,6 +6,7 @@ use crate::packets::{Message, MessageType};
 use std::time::{Duration, Instant};
 
 use log::debug;
+use tokio::sync::mpsc;
 
 pub struct OutboundRequestStorage {
     requests: std::collections::HashMap<TransactionId, RequestInfo>,
@@ -64,15 +65,18 @@ impl OutboundRequestStorage {
     pub fn prune_older_than(&mut self, duration: Duration) {
         match Instant::now().checked_sub(duration) {
             None => {
-                debug!(target: "rustydht_lib::NodeBucketStorage",
+                debug!(target: "rustydht_lib::OutboundRequestStorage",
                     "Outbound request storage skipping pruning due to monotonic clock underflow"
                 );
             }
 
             Some(time) => {
+                let len_before = self.requests.len();
                 self.requests.retain(|_, v| -> bool {
                     return v.created_at >= time;
                 });
+                let len_after = self.requests.len();
+                debug!(target: "rustydht_lib::OutboundRequestStorage", "Pruned {} request records", len_before - len_after);
             }
         }
     }
@@ -87,15 +91,22 @@ pub struct RequestInfo {
     id: Option<Id>,
     packet: Message,
     created_at: Instant,
+    pub(crate) response_channel: Option<mpsc::Sender<Message>>,
 }
 
 impl RequestInfo {
-    pub fn new(addr: SocketAddr, id: Option<Id>, packet: Message) -> RequestInfo {
+    pub fn new(
+        addr: SocketAddr,
+        id: Option<Id>,
+        packet: Message,
+        response_channel: Option<mpsc::Sender<Message>>,
+    ) -> RequestInfo {
         RequestInfo {
             addr: addr,
             id: id,
             packet: packet,
             created_at: Instant::now(),
+            response_channel: response_channel,
         }
     }
 }
@@ -113,7 +124,8 @@ mod tests {
         let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
         let req = Message::create_ping_request(our_id);
 
-        let request_info = RequestInfo::new("127.0.0.1:1234".parse().unwrap(), None, req.clone());
+        let request_info =
+            RequestInfo::new("127.0.0.1:1234".parse().unwrap(), None, req.clone(), None);
 
         // Add request to storage, make sure it's there
         storage.add_request(request_info);
@@ -146,9 +158,10 @@ mod tests {
         let req = Message::create_ping_request(our_id);
         let req_2 = Message::create_ping_request(our_id);
 
-        let request_info = RequestInfo::new("127.0.0.1:1234".parse().unwrap(), None, req.clone());
+        let request_info =
+            RequestInfo::new("127.0.0.1:1234".parse().unwrap(), None, req.clone(), None);
         let mut request_info_2 =
-            RequestInfo::new("127.0.0.1:1234".parse().unwrap(), None, req_2.clone());
+            RequestInfo::new("127.0.0.1:1234".parse().unwrap(), None, req_2.clone(), None);
         request_info_2.created_at = Instant::now() + Duration::from_secs(10);
 
         // Add request to storage, make sure it's there
