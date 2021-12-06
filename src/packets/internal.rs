@@ -163,6 +163,7 @@ pub struct DHTAnnouncePeerRequestArguments {
     #[serde(with = "serde_bytes")]
     pub token: Vec<u8>,
 
+    #[serde(default)]
     pub implied_port: Option<u8>,
 }
 
@@ -190,8 +191,10 @@ pub struct DHTGetPeersResponseArguments {
     pub token: Vec<u8>,
 
     #[serde(with = "serde_bytes")]
+    #[serde(default)]
     pub nodes: Option<Vec<u8>>,
 
+    #[serde(default)]
     pub values: Option<Vec<serde_bytes::ByteBuf>>,
 }
 
