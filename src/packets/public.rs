@@ -875,6 +875,30 @@ mod tests {
     }
 
     #[test]
+    fn test_get_peers_response_peers() {
+        let original_msg = Message {
+            transaction_id: vec![1, 2, 3],
+            version: Some(vec![1]),
+            requester_ip: Some("50.51.52.53:5455".parse().unwrap()),
+            message_type: MessageType::Response(ResponseSpecific::GetPeersResponse(
+                GetPeersResponseArguments {
+                    responder_id: Id::from_hex("0505050505050505050505050505050505050505").unwrap(),
+                    token: vec![99, 100, 101, 102],
+                    values: GetPeersResponseValues::Peers(vec!["123.123.123.0:123"
+                        .parse()
+                        .unwrap()]),
+                },
+            )),
+        };
+
+        let serde_msg = original_msg.clone().to_serde_message();
+        let bytes = serde_msg.to_bytes().unwrap();
+        let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
+        let parsed_msg = Message::from_serde_message(parsed_serde_msg).unwrap();
+        assert_eq!(parsed_msg, original_msg);
+    }
+
+    #[test]
     fn test_find_node_request() {
         let original_msg = Message {
             transaction_id: vec![1, 2, 3],

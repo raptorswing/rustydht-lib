@@ -185,7 +185,7 @@ impl DHTSocket {
         // Is this message a reply to something we sent? If so, notify via specific channel
         if let Some(request_info) = request_info {
             if let Some(response_channel) = request_info.response_channel {
-                if let Err(e) = response_channel.send(message).await {
+                if let Err(e) = response_channel.send(message.clone()).await {
                     let message = e.0;
                     warn!(target: "rustydht_lib::DHTSocket", "Got response, but sending code abandoned the channel receiver. So sad. Response: {:?}. Sender: {:?}", message, sender);
                 }
@@ -193,13 +193,11 @@ impl DHTSocket {
                 warn!(target: "rustydht_lib::DHTSocket", "Got response, but can't notify due to no channel. I should make channel required. Response: {:?}. Sender: {:?}", message, sender);
             }
         }
-        // Otherwise send it to the generic recv_from channel
-        else {
-            recv_from_tx
-                .send((message, sender))
-                .await
-                .map_err(|e| RustyDHTError::GeneralError(e.into()))?;
-        }
+        // Always send it to the generic recv_from channel
+        recv_from_tx
+            .send((message, sender))
+            .await
+            .map_err(|e| RustyDHTError::GeneralError(e.into()))?;
         Ok(())
     }
 
