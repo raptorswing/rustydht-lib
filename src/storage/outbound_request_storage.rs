@@ -33,18 +33,37 @@ impl OutboundRequestStorage {
         return self.requests.contains_key(&tid.clone().into());
     }
 
-    pub fn get_matching_request_info(&self, msg: &Message) -> Option<&RequestInfo> {
+    pub fn get_matching_request_info(
+        &self,
+        msg: &Message,
+        src_addr: SocketAddr,
+    ) -> Option<&RequestInfo> {
         let tid = msg.transaction_id.clone().into();
 
         // Is this packet a response?
         if let MessageType::Response(res_specific) = &msg.message_type {
             // Is there a matching transaction id in storage?
             if let Some(request_info) = self.requests.get(&tid) {
-                // Is the thing in storage a request packet (It should always be...)
-                if let MessageType::Request(req_specific) = &request_info.packet.message_type {
-                    // Does the response type match the request type?
-                    if crate::packets::response_matches_request(&res_specific, &req_specific) {
-                        return Some(request_info);
+                // Did this response come from the expected IP address?
+                if request_info.addr == src_addr {
+                    let response_sender_id = msg.get_author_id();
+                    // Does the Id of the sender match the recorded addressee of the original request (if any)?
+                    if request_info.id.is_none()
+                        || (response_sender_id.is_some()
+                            && request_info.id.unwrap() == response_sender_id.unwrap())
+                    {
+                        // Is the thing in storage a request packet (It should always be...)
+                        if let MessageType::Request(req_specific) =
+                            &request_info.packet.message_type
+                        {
+                            // Does the response type match the request type?
+                            if crate::packets::response_matches_request(
+                                &res_specific,
+                                &req_specific,
+                            ) {
+                                return Some(request_info);
+                            }
+                        }
                     }
                 }
             }
@@ -53,8 +72,12 @@ impl OutboundRequestStorage {
         None
     }
 
-    pub fn take_matching_request_info(&mut self, response: &Message) -> Option<RequestInfo> {
-        if let Some(_) = self.get_matching_request_info(response) {
+    pub fn take_matching_request_info(
+        &mut self,
+        response: &Message,
+        src_addr: SocketAddr,
+    ) -> Option<RequestInfo> {
+        if let Some(_) = self.get_matching_request_info(response, src_addr) {
             let tid = response.transaction_id.clone().into();
             return self.requests.remove(&tid);
         }
@@ -86,6 +109,7 @@ impl OutboundRequestStorage {
     }
 }
 
+#[derive(Debug)]
 pub struct RequestInfo {
     addr: SocketAddr,
     id: Option<Id>,
@@ -124,8 +148,8 @@ mod tests {
         let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
         let req = Message::create_ping_request(our_id);
 
-        let request_info =
-            RequestInfo::new("127.0.0.1:1234".parse().unwrap(), None, req.clone(), None);
+        let request_target_addr = "127.0.0.1:1234".parse().unwrap();
+        let request_info = RequestInfo::new(request_target_addr, None, req.clone(), None);
 
         // Add request to storage, make sure it's there
         storage.add_request(request_info);
@@ -137,13 +161,20 @@ mod tests {
             req.transaction_id.clone(),
             "127.0.0.1:1235".parse().unwrap(),
         );
+
+        // We should get something if the SocketAddr matches
         assert!(storage
-            .get_matching_request_info(&simulated_response)
+            .get_matching_request_info(&simulated_response, request_target_addr)
             .is_some());
+
+        // We should NOT get something if the SocketAddr doesn't match
+        assert!(storage
+            .get_matching_request_info(&simulated_response, "5.5.5.5:1234".parse().unwrap())
+            .is_none());
 
         // Take the response
         assert!(storage
-            .take_matching_request_info(&simulated_response)
+            .take_matching_request_info(&simulated_response, request_target_addr)
             .is_some());
 
         // Should have nothing left
