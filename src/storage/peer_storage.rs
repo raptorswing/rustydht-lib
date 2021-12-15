@@ -7,6 +7,7 @@ use lru::LruCache;
 
 use log::debug;
 
+#[derive(Eq, PartialEq, Copy, Clone)]
 pub struct PeerInfo {
     addr: SocketAddr,
     last_updated: std::time::Instant,
@@ -56,6 +57,15 @@ impl PeerStorage {
         info_hash: &Id,
         newer_than: Option<std::time::Instant>,
     ) -> Vec<SocketAddr> {
+        let infos = self.get_peers_info(info_hash, newer_than);
+        infos.iter().map(|info| info.addr).collect
+    }
+
+    pub fn get_peers_info(
+        &self,
+        info_hash: &Id,
+        newer_than: Option<std::time::Instant>,
+    ) -> Vec<PeerInfo> {
         let mut peers = self.peers.borrow_mut();
         let mut to_ret = Vec::new();
         if let Some(swarm_lru) = peers.get(info_hash) {
@@ -63,7 +73,7 @@ impl PeerStorage {
                 .iter()
                 .filter(|pi| pi.0.ip().is_ipv4()) // Only return IPv4 for now, you dog!
                 .filter(|pi| newer_than.is_none() || pi.1.last_updated > newer_than.unwrap())
-                .map(|pi| pi.1.addr)
+                .map(|pi| pi.1.clone())
                 .collect();
             to_ret.append(&mut tmp);
         }

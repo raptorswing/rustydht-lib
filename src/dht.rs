@@ -27,7 +27,7 @@ use crate::packets;
 use crate::shutdown;
 use crate::socket::DHTSocket;
 use crate::storage::node_bucket_storage::NodeStorage;
-use crate::storage::peer_storage::PeerStorage;
+use crate::storage::peer_storage::{PeerInfo, PeerStorage};
 use crate::storage::throttler::Throttler;
 
 pub struct DHTSettings {
@@ -546,6 +546,22 @@ impl DHT {
 
     pub fn get_id(&self) -> Id {
         self.state.try_lock().unwrap().our_id
+    }
+
+    /// Returns tuple of (unverified, verified) nodes
+    pub fn get_num_nodes(&self) -> (usize, usize) {
+        self.state.try_lock().unwrap().buckets.count()
+    }
+
+    pub fn get_info_hashes(&self, newer_than: Option<Instant>) -> Vec<(Id, Vec<PeerInfo>)> {
+        let state = self.state.try_lock().unwrap();
+        let hashes = state.peer_storage.get_info_hashes();
+        hashes
+            .iter()
+            .copied()
+            .map(|hash| (hash, state.peer_storage.get_peers_info(&hash, newer_than)))
+            .filter(|tup| tup.1.len() > 0)
+            .collect()
     }
 
     async fn periodic_buddy_ping(
