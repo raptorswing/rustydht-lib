@@ -96,7 +96,6 @@ impl Id {
         return to_ret;
     }
 
-    #[cfg(test)]
     pub fn from_hex(h: &str) -> Result<Id, RustyDHTError> {
         let bytes =
             hex::decode(h).map_err(|hex_err| RustyDHTError::PacketParseError(hex_err.into()))?;
