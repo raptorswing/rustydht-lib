@@ -7,7 +7,7 @@ use tokio::time::sleep;
 #[derive(Clone)]
 pub struct ShutdownReceiver {
     shutdown_rx: watch::Receiver<bool>,
-    shutdown_confirm_tx: broadcast::Sender<bool>,
+    _shutdown_confirm_tx: broadcast::Sender<bool>,
 }
 
 impl ShutdownReceiver {
@@ -78,7 +78,7 @@ pub fn create_shutdown() -> (ShutdownSender, ShutdownReceiver) {
         },
         ShutdownReceiver {
             shutdown_rx: shutdown_rx,
-            shutdown_confirm_tx: shutdown_confirm_tx,
+            _shutdown_confirm_tx: shutdown_confirm_tx,
         },
     )
 }
