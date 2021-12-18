@@ -28,6 +28,10 @@ pub struct Message {
     pub requester_ip: Option<SocketAddr>,
 
     pub message_type: MessageType,
+
+    /// For bep0043. When set true on a request, indicates that the requester can't reply to requests and that responders should not add requester to their routing tables.
+    /// Should only be set on requests - undefined behavior when set on a response.
+    pub read_only: Option<bool>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -143,6 +147,10 @@ impl Message {
             ip: match self.requester_ip {
                 None => None,
                 Some(sockaddr) => Some(sockaddr_to_bytes(&sockaddr)),
+            },
+            read_only: match self.read_only {
+                None => None,
+                Some(read_only) => Some(if read_only { 1 } else { 0 }),
             },
             variant: match self.message_type {
                 MessageType::Request(req) => internal::DHTMessageVariant::DHTRequest(match req {
@@ -281,6 +289,10 @@ impl Message {
             version: msg.version,
             requester_ip: match msg.ip {
                 Some(ip) => Some(bytes_to_sockaddr(ip)?),
+                _ => None,
+            },
+            read_only: match msg.read_only {
+                Some(read_only) => Some(read_only >= 1),
                 _ => None,
             },
 
@@ -479,6 +491,7 @@ impl Message {
             transaction_id: vec![rng.gen(), rng.gen()],
             version: None,
             requester_ip: None,
+            read_only: None,
             message_type: MessageType::Request(RequestSpecific::PingRequest(
                 PingRequestArguments {
                     requester_id: requester_id,
@@ -495,6 +508,7 @@ impl Message {
             transaction_id: transaction_id,
             version: None,
             requester_ip: Some(remote),
+            read_only: None,
             message_type: MessageType::Response(ResponseSpecific::PingResponse(
                 PingResponseArguments {
                     responder_id: responder_id,
@@ -509,6 +523,7 @@ impl Message {
             transaction_id: vec![rng.gen(), rng.gen()],
             version: None,
             requester_ip: None,
+            read_only: None,
             message_type: MessageType::Request(RequestSpecific::GetPeersRequest(
                 GetPeersRequestArguments {
                     requester_id: requester_id,
@@ -529,6 +544,7 @@ impl Message {
             transaction_id: transaction_id,
             version: None,
             requester_ip: Some(requester_ip),
+            read_only: None,
             message_type: MessageType::Response(ResponseSpecific::GetPeersResponse(
                 GetPeersResponseArguments {
                     responder_id: responder_id,
@@ -550,6 +566,7 @@ impl Message {
             transaction_id: transaction_id,
             version: None,
             requester_ip: Some(requester_ip),
+            read_only: None,
             message_type: MessageType::Response(ResponseSpecific::GetPeersResponse(
                 GetPeersResponseArguments {
                     responder_id: responder_id,
@@ -566,6 +583,7 @@ impl Message {
             transaction_id: vec![rng.gen(), rng.gen()],
             version: None,
             requester_ip: None,
+            read_only: None,
             message_type: MessageType::Request(RequestSpecific::FindNodeRequest(
                 FindNodeRequestArguments {
                     requester_id: requester_id,
@@ -585,6 +603,7 @@ impl Message {
             transaction_id: transaction_id,
             version: None,
             requester_ip: Some(requester_ip),
+            read_only: None,
             message_type: MessageType::Response(ResponseSpecific::FindNodeResponse(
                 FindNodeResponseArguments {
                     responder_id: responder_id,
@@ -606,6 +625,7 @@ impl Message {
             transaction_id: vec![rng.gen(), rng.gen()],
             version: None,
             requester_ip: None,
+            read_only: None,
             message_type: MessageType::Request(RequestSpecific::AnnouncePeerRequest(
                 AnnouncePeerRequestArguments {
                     requester_id: requester_id,
@@ -624,6 +644,7 @@ impl Message {
             transaction_id: vec![rng.gen(), rng.gen()],
             version: None,
             requester_ip: None,
+            read_only: None,
             message_type: MessageType::Request(RequestSpecific::SampleInfoHashesRequest(
                 SampleInfoHashesRequestArguments {
                     requester_id: requester_id,
@@ -646,6 +667,7 @@ impl Message {
             transaction_id: transaction_id,
             version: None,
             requester_ip: Some(requester_ip),
+            read_only: None,
             message_type: MessageType::Response(ResponseSpecific::SampleInfoHashesResponse(
                 SampleInfoHashesResponseArguments {
                     responder_id: responder_id,
@@ -794,6 +816,7 @@ mod tests {
             transaction_id: vec![0, 1, 2],
             version: None,
             requester_ip: None,
+            read_only: None,
             message_type: MessageType::Request(RequestSpecific::PingRequest(
                 PingRequestArguments {
                     requester_id: Id::from_hex("f00ff00ff00ff00ff00ff00ff00ff00ff00ff00f").unwrap(),
@@ -814,6 +837,7 @@ mod tests {
             transaction_id: vec![1, 2, 3],
             version: Some(vec![0xde, 0xad]),
             requester_ip: Some("99.100.101.102:1030".parse().unwrap()),
+            read_only: None,
             message_type: MessageType::Response(ResponseSpecific::PingResponse(
                 PingResponseArguments {
                     responder_id: Id::from_hex("beefbeefbeefbeefbeefbeefbeefbeefbeefbeef").unwrap(),
@@ -834,6 +858,7 @@ mod tests {
             transaction_id: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
             version: Some(vec![72, 73]),
             requester_ip: None,
+            read_only: None,
             message_type: MessageType::Request(RequestSpecific::GetPeersRequest(
                 GetPeersRequestArguments {
                     info_hash: Id::from_hex("deaddeaddeaddeaddeaddeaddeaddeaddeaddead").unwrap(),
@@ -855,6 +880,7 @@ mod tests {
             transaction_id: vec![1, 2, 3],
             version: Some(vec![1]),
             requester_ip: Some("50.51.52.53:5455".parse().unwrap()),
+            read_only: None,
             message_type: MessageType::Response(ResponseSpecific::GetPeersResponse(
                 GetPeersResponseArguments {
                     responder_id: Id::from_hex("0505050505050505050505050505050505050505").unwrap(),
@@ -880,6 +906,7 @@ mod tests {
             transaction_id: vec![1, 2, 3],
             version: Some(vec![1]),
             requester_ip: Some("50.51.52.53:5455".parse().unwrap()),
+            read_only: None,
             message_type: MessageType::Response(ResponseSpecific::GetPeersResponse(
                 GetPeersResponseArguments {
                     responder_id: Id::from_hex("0505050505050505050505050505050505050505").unwrap(),
@@ -904,6 +931,29 @@ mod tests {
             transaction_id: vec![1, 2, 3],
             version: Some(vec![0x62, 0x61, 0x72, 0x66]),
             requester_ip: None,
+            read_only: None,
+            message_type: MessageType::Request(RequestSpecific::FindNodeRequest(
+                FindNodeRequestArguments {
+                    target: Id::from_hex("1234123412341234123412341234123412341234").unwrap(),
+                    requester_id: Id::from_hex("5678567856785678567856785678567856785678").unwrap(),
+                },
+            )),
+        };
+
+        let serde_msg = original_msg.clone().to_serde_message();
+        let bytes = serde_msg.to_bytes().unwrap();
+        let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
+        let parsed_msg = Message::from_serde_message(parsed_serde_msg).unwrap();
+        assert_eq!(parsed_msg, original_msg);
+    }
+
+    #[test]
+    fn test_find_node_request_read_only() {
+        let original_msg = Message {
+            transaction_id: vec![1, 2, 3],
+            version: Some(vec![0x62, 0x61, 0x72, 0x66]),
+            requester_ip: None,
+            read_only: Some(true),
             message_type: MessageType::Request(RequestSpecific::FindNodeRequest(
                 FindNodeRequestArguments {
                     target: Id::from_hex("1234123412341234123412341234123412341234").unwrap(),
@@ -925,6 +975,7 @@ mod tests {
             transaction_id: vec![1, 2, 3],
             version: Some(vec![1]),
             requester_ip: Some("50.51.52.53:5455".parse().unwrap()),
+            read_only: None,
             message_type: MessageType::Response(ResponseSpecific::FindNodeResponse(
                 FindNodeResponseArguments {
                     responder_id: Id::from_hex("0505050505050505050505050505050505050505").unwrap(),
@@ -949,6 +1000,7 @@ mod tests {
             transaction_id: vec![1, 2, 3],
             version: Some(vec![0x62, 0x61, 0x72, 0x66]),
             requester_ip: None,
+            read_only: None,
             message_type: MessageType::Request(RequestSpecific::AnnouncePeerRequest(
                 AnnouncePeerRequestArguments {
                     requester_id: Id::from_hex("5678567856785678567856785678567856785678").unwrap(),
@@ -973,6 +1025,7 @@ mod tests {
             transaction_id: vec![1, 2, 3],
             version: Some(vec![0x62, 0x61, 0x72, 0x66]),
             requester_ip: None,
+            read_only: None,
             message_type: MessageType::Request(RequestSpecific::SampleInfoHashesRequest(
                 SampleInfoHashesRequestArguments {
                     requester_id: Id::from_hex("5678567856785678567856785678567856785678").unwrap(),
@@ -994,6 +1047,7 @@ mod tests {
             transaction_id: vec![1, 2, 3],
             version: Some(vec![1]),
             requester_ip: Some("50.51.52.53:5455".parse().unwrap()),
+            read_only: None,
             message_type: MessageType::Response(ResponseSpecific::SampleInfoHashesResponse(
                 SampleInfoHashesResponseArguments {
                     responder_id: Id::from_hex("0505050505050505050505050505050505050505").unwrap(),
@@ -1024,6 +1078,7 @@ mod tests {
             transaction_id: vec![97, 97],
             version: None,
             requester_ip: None,
+            read_only: None,
             message_type: MessageType::Error(ErrorSpecific {
                 code: 201,
                 description: "A Generic Error Occured".to_string(),

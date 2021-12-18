@@ -17,6 +17,10 @@ pub struct DHTMessage {
     #[serde(default)]
     #[serde(with = "serde_bytes")]
     pub ip: Option<Vec<u8>>,
+
+    #[serde(default)]
+    #[serde(rename = "ro")]
+    pub read_only: Option<i32>,
 }
 
 impl DHTMessage {
@@ -233,6 +237,7 @@ mod tests {
                     id: hex::decode("70f923e90771701587b6d36fbb78b3a8047b092e").unwrap(),
                 },
             }),
+            read_only: None,
         };
 
         assert_eq!(legit, message);
@@ -252,6 +257,7 @@ mod tests {
                     id: hex::decode("70f22fcfdc27e4ff28f0c00a6a3de0d6c4361ccd").unwrap(),
                 },
             }),
+            read_only: None,
         };
 
         assert_eq!(legit, message);
@@ -272,6 +278,7 @@ mod tests {
                     info_hash: hex::decode("70f986a9fb5a9e8e0bafc62165b7178360332109").unwrap(),
                 },
             }),
+            read_only: None,
         };
 
         assert_eq!(legit, message);
@@ -293,7 +300,8 @@ mod tests {
                     token: hex::decode("76b5550c").unwrap(),
                     values: None,
                 }
-            })
+            }),
+            read_only: None,
         };
 
         assert_eq!(legit, message);
@@ -314,6 +322,7 @@ mod tests {
                     target: hex::decode("4800711700005e9e00001b190000391d00005a95").unwrap(),
                 },
             }),
+            read_only: None,
         };
 
         assert_eq!(legit, message);
@@ -333,7 +342,8 @@ mod tests {
                         id: hex::decode("70f923e90771701587b6d36fbb78b3a8047b092e").unwrap(),
                         nodes: hex::decode("4bcf558e1e7f7543f63f6cd57ca9c50d446e898d5f5499481ae14bf18f4fa61e6fc2a944b024511bfc0f67997eff8e86c3565f854f65edbc03f23184dedf8d8619b0916bbcaca617d5855fc71ae14fb2b2feff1694d9a3ccbda1c68dbe4efb62f08f5f58f6cb1ae142024361c0ecf637b4125af472a8214fe49c9603a93f15571ae142db840f263413b8a8603e1e87fea7cc0bf1bd0c3216850a1ae15b506431ba2475bbe30a243217c091adafe45f563b157ed71f525bc83812fadb89e6d47df829a327b951c9b726a9a93dda2d1ae1").unwrap(),
                     }
-                })
+                }),
+                read_only: None,
             };
 
         assert_eq!(legit, message);
@@ -357,6 +367,31 @@ mod tests {
                     port: 11911,
                 },
             }),
+            read_only: None,
+        };
+
+        assert_eq!(legit, message);
+    }
+
+    #[test]
+    fn test_parse_announce_peer_request_read_only() {
+        let bytes = hex::decode("64313a6164323a696432303a4dc3d74ff5133ab5fb45b8e919e5083e516e9e7331323a696d706c6965645f706f7274693165393a696e666f5f6861736832303a0dfb5308ef7e64a929d1a836fa40a12eddbfaf12343a706f727469333230303065353a746f6b656e343aa78be86365313a7131333a616e6e6f756e63655f70656572323a726f693165313a74343afda0a901313a79313a7165").unwrap();
+        let message = DHTMessage::from_bytes(bytes).expect("Failed to parse");
+
+        let legit = DHTMessage {
+            transaction_id: hex::decode("fda0a901").unwrap(),
+            ip: None,
+            version: None,
+            variant: DHTMessageVariant::DHTRequest(DHTRequestSpecific::DHTAnnouncePeerRequest {
+                arguments: DHTAnnouncePeerRequestArguments {
+                    id: hex::decode("4dc3d74ff5133ab5fb45b8e919e5083e516e9e73").unwrap(),
+                    info_hash: hex::decode("0dfb5308ef7e64a929d1a836fa40a12eddbfaf12").unwrap(),
+                    token: hex::decode("a78be863").unwrap(),
+                    implied_port: Some(1),
+                    port: 32000,
+                },
+            }),
+            read_only: Some(1),
         };
 
         assert_eq!(legit, message);
@@ -377,6 +412,7 @@ mod tests {
                     id: hex::decode("70f923e90771701587b6d36fbb78b3a8047b092e").unwrap(),
                 },
             }),
+            read_only: None,
         };
 
         assert_eq!(legit, message);
@@ -399,6 +435,7 @@ mod tests {
                     },
                 },
             ),
+            read_only: None,
         };
 
         assert_eq!(legit, message);
@@ -421,7 +458,8 @@ mod tests {
                     num: 50,
                     samples: hex::decode("70f9016c33064c1588b7fc72ba51d16b7a808c5170fdb5e6b8330a133375825453f43325dc1179e570f9a5683c028a3285edb48e0054ab0297171a7370f923768792cdda855d52d8f94674a4b085471d70f94e390702f1752df4d22b56b0beb6201b1da370fbfd6ee5f04066826bb483934296fd93e965f670fa23ab785c8958e95e97055a6443af8b27395e70fd94fd6e8833fdc708f54c913384c255fdcc8f70f870271cbcbae8e168e718de24518509bdd4ca70f2fba18423616ec25af3f20b1e331a050ad0da70f95bd4331fa413d7b8c5105a5b40e2dec6b2117013b667f0d899711de54b18b6aac4eeb2a20bca70b3119918544af1550f541a273cc5066fa3749670deaece52a2e7cbd720d86738b1d9940d41a41470ea875f2440ca33c972beca8796036a07b203fc71e3097589ddc215091f24f46d0e921796faf89d70edfb3f69a41c9ecfa01a885f4071ebbca1301570c28d739c5bca06ab10c69122fa6eb7efbf3aa072a5bcd8cc6b6ef3bd7fbcd1aa6ee5f8b93d605870f116deb1571be860e93968b505e88fb823d835706e206f7e7ee0427ec411923b5f9c4f2f6206f670fdb9eb81aea469579f6507cf6d77c919f5063c754361e374a06a314bcbe035105ddaa683948b1570e0f10f444494739d93f0a99921ae4f65746f0a70f4b7663fc542817d374e6aab9c6c672d6caeb27022f4947d059fb44d5e77847593148675bb461c70f828a524473b9fc47dc1f6bd03c531e29b02a0579692958a7ef01ec5fd2fec19d6e6a5d70f73cd69c63da6c452d66a1f07764e560cdf481c03926e70f9ab992cfcaf44f019a4e7e3a1fa156310953970fca0330dc5a8be0b049c355d757c018e84a69d70f936a4d868a160b3d28e258a949da5269f95dd70ea1254e774f4de28f1958130ae29e1b0ae676705239c876fc0625b0747c15bafa9c74c54b1c59f70f9700293c36bd5cd577809ce1bbfd095f68c3470fb25dca1bb972adf030198a86df35d4ed5895470f92e4cb578dbbbb597d5ce817800cc0b16ffb670fbc1fce7ebe963801a0ae3cbe458d4d0a7610d7078d197e43ec4241fb64113e40de762caa4ec3770f922d83be65f62b529af80863ce95633dea31670ae40c35ade9e78a221ea03374166713f0e978870fb102aecf0d60667da804c65133daf6ee6535170f92673005393101e1eb72a40867ee9ab593a6a7093103de4f85fa0b129ce581a9ec8d1bceacd8170e9e99dddae872c6db7b8f59a5f2e75042bee1070c38852f2a1a4daf2cf26bdf35f50726784c36e70f9f09736a704b5ba429f2fcbc9b3bcef01d9db70fa495a44064f605aae7a0426f1bc79c973589870fa4174330e8af3de839f67b2648c39c2ee80c370b44351557950999a0512211ae4d5b8d34d7e13").unwrap(),
                 }
-            })
+            }),
+            read_only: None,
         };
 
         assert_eq!(legit, message);

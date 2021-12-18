@@ -258,7 +258,11 @@ impl DHT {
                     packets::RequestSpecific::PingRequest(arguments) => {
                         // Is id valid for IP?
                         let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
-                        if is_id_valid {
+                        let read_only = match msg.read_only {
+                            Some(ro) => ro,
+                            _ => false,
+                        };
+                        if is_id_valid && !read_only {
                             self.state
                                 .try_lock()
                                 .unwrap()
@@ -282,7 +286,11 @@ impl DHT {
                             let mut state = self.state.try_lock().unwrap();
                             // Is id valid for IP?
                             let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
-                            if is_id_valid {
+                            let read_only = match msg.read_only {
+                                Some(ro) => ro,
+                                _ => false,
+                            };
+                            if is_id_valid && !read_only {
                                 state
                                     .buckets
                                     .add_or_update(Node::new(arguments.requester_id, addr), false);
@@ -337,7 +345,11 @@ impl DHT {
                             let mut state = self.state.try_lock().unwrap();
                             // Is id valid for IP?
                             let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
-                            if is_id_valid {
+                            let read_only = match msg.read_only {
+                                Some(ro) => ro,
+                                _ => false,
+                            };
+                            if is_id_valid && !read_only {
                                 state
                                     .buckets
                                     .add_or_update(Node::new(arguments.requester_id, addr), false);
@@ -364,13 +376,17 @@ impl DHT {
                         let reply = {
                             let mut state = self.state.try_lock().unwrap();
                             let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
+                            let read_only = match msg.read_only {
+                                Some(ro) => ro,
+                                _ => false,
+                            };
 
                             let is_token_valid = arguments.token
                                 == calculate_token(&addr, state.token_secret.clone())
                                 || arguments.token
                                     == calculate_token(&addr, state.old_token_secret.clone());
 
-                            if is_id_valid {
+                            if is_id_valid && !read_only {
                                 state.buckets.add_or_update(
                                     Node::new(arguments.requester_id, addr),
                                     is_token_valid,
@@ -414,7 +430,11 @@ impl DHT {
                         let reply = {
                             let mut state = self.state.try_lock().unwrap();
                             let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
-                            if is_id_valid {
+                            let read_only = match msg.read_only {
+                                Some(ro) => ro,
+                                _ => false,
+                            };
+                            if is_id_valid && !read_only {
                                 state
                                     .buckets
                                     .add_or_update(Node::new(arguments.requester_id, addr), false);
