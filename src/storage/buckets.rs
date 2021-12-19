@@ -1,12 +1,14 @@
 use crate::common::Id;
 use std::time::Instant;
 
+/// Anything that implements this trait can be stored in Buckets
 pub trait Bucketable {
     fn get_id(&self) -> Id;
 
     fn get_first_seen(&self) -> Instant;
 }
 
+/// This data structure implements the bucket system described in [BEP0005](http://bittorrent.org/beps/bep_0005.html) (more or less).
 pub struct Buckets<T: Bucketable> {
     our_id: Id,
     buckets: Vec<Vec<T>>,

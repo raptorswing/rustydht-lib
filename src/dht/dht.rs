@@ -28,7 +28,8 @@ use crate::errors::RustyDHTError;
 use crate::packets;
 use crate::shutdown;
 use crate::storage::node_bucket_storage::NodeStorage;
-use crate::storage::peer_storage::PeerStorage;
+use crate::storage::node_wrapper::NodeWrapper;
+use crate::storage::peer_storage::{PeerInfo, PeerStorage};
 use crate::storage::throttler::Throttler;
 
 struct DHTState {
@@ -56,6 +57,24 @@ impl DHT {
     /// Returns the current Id used by the DHT.
     pub fn get_id(&self) -> Id {
         self.state.try_lock().unwrap().our_id
+    }
+
+    /// Returns a full dump of all the info hashes and peers in storage.
+    /// Peers that haven't announced since the provided `newer_than` can be optionally filtered.
+    pub fn get_info_hashes(&self, newer_than: Option<Instant>) -> Vec<(Id, Vec<PeerInfo>)> {
+        let state = self.state.try_lock().unwrap();
+        let hashes = state.peer_storage.get_info_hashes();
+        hashes
+            .iter()
+            .copied()
+            .map(|hash| (hash, state.peer_storage.get_peers_info(&hash, newer_than)))
+            .filter(|tup| tup.1.len() > 0)
+            .collect()
+    }
+
+    /// Returns information about all currently-verified DHT nodes that we're "connected" with.
+    pub fn get_nodes(&self) -> Vec<NodeWrapper> {
+        self.state.try_lock().unwrap().buckets.get_all_verified()
     }
 
     /// Creates a new DHT.
