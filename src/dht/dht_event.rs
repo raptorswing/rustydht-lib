@@ -7,7 +7,7 @@ pub struct DHTEvent {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum DHTEventType {
-    MessageReceived(MessageReceivedEvent)
+    MessageReceived(MessageReceivedEvent),
 }
 
 #[derive(Debug, PartialEq, Clone)]

@@ -21,90 +21,15 @@ use std::time::{Duration, Instant};
 
 use crate::common::ipv4_addr_src::IPV4AddrSource;
 use crate::common::{Id, Node};
-use crate::dht_event::{DHTEvent, DHTEventType, MessageReceivedEvent};
+use crate::dht::dht_event::{DHTEvent, DHTEventType, MessageReceivedEvent};
+use crate::dht::socket::DHTSocket;
+use crate::dht::DHTSettings;
 use crate::errors::RustyDHTError;
 use crate::packets;
 use crate::shutdown;
-use crate::socket::DHTSocket;
 use crate::storage::node_bucket_storage::NodeStorage;
 use crate::storage::peer_storage::{PeerInfo, PeerStorage};
 use crate::storage::throttler::Throttler;
-
-pub struct DHTSettings {
-    /// Number of bytes for token secrets for get_peers responses
-    pub token_secret_size: usize,
-
-    /// Max number of peers to provide in response to a get_peers.
-    /// Shouldn't be much higher than this as the entire response packet needs to be less than 1500
-    pub max_peers_response: usize,
-
-    /// Max number of info hashes to provide in response to a sample_infohashes request
-    pub max_sample_response: usize,
-
-    /// How often we claim to rotate our sample_infohashes response
-    pub min_sample_interval_secs: i32,
-
-    /// We'll ping the "routers" at least this often (we may ping more frequently if needed)
-    pub router_ping_interval_secs: u64,
-
-    /// We'll ping previously-verified nodes at least this often to re-verify them
-    pub reverify_interval_secs: u64,
-
-    /// Verified nodes that we don't reverify within this amount of time are dropped
-    pub reverify_grace_period_secs: u64,
-
-    /// New nodes have this long to respond to a ping before we drop them
-    pub verify_grace_period_secs: u64,
-
-    /// When asked to provide peers, we'll only provide ones that announced within this time
-    pub get_peers_freshness_secs: u64,
-
-    /// We'll think about sending a find_nodes request at least this often.
-    /// If we have enough nodes already we might not do it.
-    pub find_nodes_interval_secs: u64,
-
-    /// We won't send a periodic find_nodes request if we have at least this many unverified nodes
-    pub find_nodes_skip_count: usize,
-
-    /// Max number of torrents to store peers for
-    pub max_torrents: usize,
-
-    /// Max number of peers per torrent to store
-    pub max_peers_per_torrent: usize,
-
-    /// We'll think about pinging and pruning nodes at this interval
-    pub ping_check_interval_secs: u64,
-
-    /// Outgoing requests may be pruned after this many seconds
-    pub outgoing_request_prune_secs: u64,
-
-    /// We'll think about pruning outgoing requests at this interval
-    pub outgoing_reqiest_check_interval_secs: u64,
-}
-
-impl DHTSettings {
-    /// Returns DHTSettings with a default set of options.
-    pub fn default() -> DHTSettings {
-        DHTSettings {
-            token_secret_size: 10,
-            max_peers_response: 128,
-            max_sample_response: 50,
-            min_sample_interval_secs: 10,
-            router_ping_interval_secs: 900,
-            reverify_interval_secs: 14 * 60,
-            reverify_grace_period_secs: 15 * 60,
-            verify_grace_period_secs: 60,
-            get_peers_freshness_secs: 15 * 60,
-            find_nodes_interval_secs: 33,
-            find_nodes_skip_count: 32,
-            max_torrents: 50,
-            max_peers_per_torrent: 100,
-            ping_check_interval_secs: 10,
-            outgoing_request_prune_secs: 30,
-            outgoing_reqiest_check_interval_secs: 30,
-        }
-    }
-}
 
 struct DHTState {
     ip4_source: Box<dyn IPV4AddrSource + Send>,
@@ -121,13 +46,47 @@ struct DHTState {
 pub struct DHT {
     socket: Arc<DHTSocket>,
 
-    // Coarse-grained locking for stuff what needs it
+    /// Coarse-grained locking for stuff what needs it
     state: Arc<Mutex<DHTState>>,
 
     shutdown: shutdown::ShutdownReceiver,
 }
 
 impl DHT {
+    /// Returns the current Id used by the DHT.
+    pub fn get_id(&self) -> Id {
+        self.state.try_lock().unwrap().our_id
+    }
+
+    /// Returns a full dump of all the info hashes and peers in storage.
+    /// Peers that haven't announced since the provided `newer_than` can be optionally filtered.
+    pub fn get_info_hashes(&self, newer_than: Option<Instant>) -> Vec<(Id, Vec<PeerInfo>)> {
+        let state = self.state.try_lock().unwrap();
+        let hashes = state.peer_storage.get_info_hashes();
+        hashes
+            .iter()
+            .copied()
+            .map(|hash| (hash, state.peer_storage.get_peers_info(&hash, newer_than)))
+            .filter(|tup| tup.1.len() > 0)
+            .collect()
+    }
+
+    /// Returns tuple of (unverified, verified) nodes
+    pub fn get_num_nodes(&self) -> (usize, usize) {
+        self.state.try_lock().unwrap().buckets.count()
+    }
+
+    /// Creates a new DHT.
+    ///
+    /// # Arguments
+    /// * `shutdown` - the DHT passes this to any sub-tasks that it spawns, and uses it to know when to stop its event own event loop.
+    /// * `id` - an optional initial Id for the DHT. The DHT may change its Id if at some point its not valid for the external IPv4 address (as reported by ip4_source).
+    /// * `listen_port` - the port that the DHT should bind its UDP socket on.
+    /// * `ip4_source` - Some type that implements IPV4AddrSource. This object will be used by the DHT to keep up to date on its IPv4 address.
+    /// * `buckets` - A function that takes an Id and returns a struct implementing NodeStorage. The NodeStorage-implementing type will be used to keep the nodes
+    /// (or routing table) of the DHT.
+    /// * `routers` - Array of string slices with hostname:port of DHT routers. These help us get bootstrapped onto the network.
+    /// * `settings` - DHTSettings struct containing settings that DHT will use.
     pub async fn new<B>(
         shutdown: shutdown::ShutdownReceiver,
         id: Option<Id>,
@@ -201,6 +160,51 @@ impl DHT {
         Ok(dht)
     }
 
+    /// Runs the main event loop of the DHT.
+    ///
+    /// It will only return if there's an error or if the DHT's ShutdownReceiver is signalled to stop the DHT.
+    pub async fn run_event_loop(&self) -> Result<(), RustyDHTError> {
+        match tokio::try_join!(
+            // One-time
+            self.ping_routers(self.shutdown.clone()),
+            // Loop indefinitely
+            self.accept_incoming_packets(),
+            self.periodic_router_ping(self.shutdown.clone()),
+            self.periodic_buddy_ping(self.shutdown.clone()),
+            self.periodic_find_node(self.shutdown.clone()),
+            self.periodic_ip4_maintenance(),
+            self.periodic_token_rotation(),
+            async {
+                let to_ret: Result<(), RustyDHTError> = Err(RustyDHTError::ShutdownError(anyhow!(
+                    "run_event_loop should shutdown"
+                )));
+                self.shutdown.clone().watch().await;
+                return to_ret;
+            }
+        ) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                if let RustyDHTError::ShutdownError(_) = e {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    /// Subscribe to DHTEvent notifications from the DHT.
+    ///
+    /// When you're sick of receiving events from the DHT, just drop the receiver.
+    pub fn subscribe(&self) -> mpsc::Receiver<DHTEvent> {
+        let (tx, rx) = mpsc::channel(32);
+        let mut state = self.state.lock().unwrap();
+        state.subscribers.push(tx);
+        rx
+    }
+}
+
+impl DHT {
     async fn accept_incoming_packets(&self) -> Result<(), RustyDHTError> {
         let mut throttler = Throttler::new(
             10,
@@ -525,65 +529,6 @@ impl DHT {
         return Ok(());
     }
 
-    /// Runs the main event loop of the DHT.
-    pub async fn run_event_loop(&self) -> Result<(), RustyDHTError> {
-        match tokio::try_join!(
-            // One-time
-            self.ping_routers(self.shutdown.clone()),
-            // Loop indefinitely
-            self.accept_incoming_packets(),
-            self.periodic_router_ping(self.shutdown.clone()),
-            self.periodic_buddy_ping(self.shutdown.clone()),
-            self.periodic_find_node(self.shutdown.clone()),
-            self.periodic_ip4_maintenance(),
-            self.periodic_token_rotation(),
-            async {
-                let to_ret: Result<(), RustyDHTError> = Err(RustyDHTError::ShutdownError(anyhow!(
-                    "run_event_loop should shutdown"
-                )));
-                self.shutdown.clone().watch().await;
-                return to_ret;
-            }
-        ) {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                if let RustyDHTError::ShutdownError(_) = e {
-                    Ok(())
-                } else {
-                    Err(e)
-                }
-            }
-        }
-    }
-
-    /// Subscribe to DHTEvent notifications from the DHT.
-    pub fn subscribe(&self) -> mpsc::Receiver<DHTEvent> {
-        let (tx, rx) = mpsc::channel(32);
-        let mut state = self.state.lock().unwrap();
-        state.subscribers.push(tx);
-        rx
-    }
-
-    pub fn get_id(&self) -> Id {
-        self.state.try_lock().unwrap().our_id
-    }
-
-    /// Returns tuple of (unverified, verified) nodes
-    pub fn get_num_nodes(&self) -> (usize, usize) {
-        self.state.try_lock().unwrap().buckets.count()
-    }
-
-    pub fn get_info_hashes(&self, newer_than: Option<Instant>) -> Vec<(Id, Vec<PeerInfo>)> {
-        let state = self.state.try_lock().unwrap();
-        let hashes = state.peer_storage.get_info_hashes();
-        hashes
-            .iter()
-            .copied()
-            .map(|hash| (hash, state.peer_storage.get_peers_info(&hash, newer_than)))
-            .filter(|tup| tup.1.len() > 0)
-            .collect()
-    }
-
     async fn periodic_buddy_ping(
         &self,
         shutdown: shutdown::ShutdownReceiver,
@@ -793,16 +738,6 @@ impl DHT {
         Ok(())
     }
 
-    pub async fn ping(
-        &self,
-        target: SocketAddr,
-        target_id: Option<Id>,
-    ) -> Result<packets::Message, RustyDHTError> {
-        let state = self.state.clone();
-        let socket = self.socket.clone();
-        DHT::ping_impl(state, socket, target, target_id).await
-    }
-
     async fn ping_impl(
         state: Arc<Mutex<DHTState>>,
         socket: Arc<DHTSocket>,
@@ -931,17 +866,6 @@ impl DHT {
             Some(Duration::from_secs(5)),
         );
         Ok(())
-    }
-
-    pub async fn find_node(
-        &self,
-        dest: SocketAddr,
-        dest_id: Option<Id>,
-        target: Id,
-    ) -> Result<packets::Message, RustyDHTError> {
-        let state = self.state.clone();
-        let socket = self.socket.clone();
-        DHT::find_node_impl(state, socket, dest, dest_id, target).await
     }
 
     async fn find_node_impl(

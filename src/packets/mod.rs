@@ -1,3 +1,3 @@
-mod public;
 mod internal;
+mod public;
 pub use public::*;

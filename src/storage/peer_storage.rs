@@ -58,7 +58,7 @@ impl PeerStorage {
         newer_than: Option<std::time::Instant>,
     ) -> Vec<SocketAddr> {
         let infos = self.get_peers_info(info_hash, newer_than);
-        infos.iter().map(|info| info.addr).collect
+        infos.iter().map(|info| info.addr).collect()
     }
 
     pub fn get_peers_info(
