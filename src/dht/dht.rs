@@ -28,6 +28,7 @@ use crate::errors::RustyDHTError;
 use crate::packets;
 use crate::shutdown;
 use crate::storage::node_bucket_storage::NodeStorage;
+use crate::storage::node_wrapper::NodeWrapper;
 use crate::storage::peer_storage::{PeerInfo, PeerStorage};
 use crate::storage::throttler::Throttler;
 
@@ -71,9 +72,9 @@ impl DHT {
             .collect()
     }
 
-    /// Returns tuple of (unverified, verified) nodes
-    pub fn get_num_nodes(&self) -> (usize, usize) {
-        self.state.try_lock().unwrap().buckets.count()
+    /// Returns information about all currently-verified DHT nodes that we're "connected" with.
+    pub fn get_nodes(&self) -> Vec<NodeWrapper> {
+        self.state.try_lock().unwrap().buckets.get_all_verified()
     }
 
     /// Creates a new DHT.
