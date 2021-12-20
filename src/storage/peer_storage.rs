@@ -9,8 +9,8 @@ use log::debug;
 
 #[derive(Eq, PartialEq, Copy, Clone)]
 pub struct PeerInfo {
-    addr: SocketAddr,
-    last_updated: std::time::Instant,
+    pub addr: SocketAddr,
+    pub last_updated: std::time::Instant,
 }
 
 impl PeerInfo {
