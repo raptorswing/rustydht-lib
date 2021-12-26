@@ -113,12 +113,15 @@ impl Id {
     }
 
     /// Makes a new id that's similar to this one.
-    pub fn make_mutant(&self) -> Id {
+    pub fn make_mutant(&self, identical_bytes: usize) -> Result<Id, RustyDHTError> {
+        if identical_bytes <= 0 || identical_bytes >= ID_SIZE {
+            return Err(RustyDHTError::GeneralError(anyhow!("identical_bytes must be in range (0, ID_SIZE)")));
+        }
         let mut mutant = Id::from_random(&mut thread_rng());
-        for i in 0..4 {
+        for i in 0..identical_bytes {
             mutant.bytes[i] = self.bytes[i];
         }
-        mutant
+        Ok(mutant)
     }
 }
 
