@@ -44,6 +44,7 @@ struct DHTState {
     subscribers: Vec<mpsc::Sender<DHTEvent>>,
 }
 
+/// This struct is the heart of the library - contains data structure and business logic to run a DHT node.
 pub struct DHT {
     socket: Arc<DHTSocket>,
 
@@ -651,7 +652,7 @@ impl DHT {
                     continue;
                 }
 
-                let id_near_us = state.our_id.make_mutant();
+                let id_near_us = state.our_id.make_mutant(4).unwrap();
 
                 // Find the closest nodes to ask
                 (
@@ -1234,7 +1235,7 @@ mod test {
         let dht2 = Arc::new(
             DHT::new(
                 shutdown_rx.clone(),
-                Some(get_dht_id().make_mutant()),
+                Some(get_dht_id().make_mutant(4).unwrap()),
                 port2,
                 Box::new(StaticIPV4AddrSource::new(Ipv4Addr::new(1, 2, 3, 4))),
                 |id| -> Box<dyn NodeStorage + Send> {

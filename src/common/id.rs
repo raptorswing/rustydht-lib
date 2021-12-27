@@ -10,14 +10,19 @@ use std::net::IpAddr;
 
 use crate::errors::RustyDHTError;
 
+/// The length (in bytes) of BitTorrent info hashes and DHT node ids.
 pub const ID_SIZE: usize = 20;
 
+/// Represents the id of a [Node](crate::common::Node) or a BitTorrent info-hash. Basically, it's a
+/// 20-byte identifier.
 #[derive(Eq, PartialEq, Copy, Clone)]
 pub struct Id {
     bytes: [u8; ID_SIZE],
 }
 
 impl Id {
+    /// Create a new Id from some bytes. Returns Err if `bytes` is not of length
+    /// [ID_SIZE](crate::common::ID_SIZE).
     pub fn from_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<Id, RustyDHTError> {
         let bytes = bytes.as_ref();
         if bytes.len() != ID_SIZE {
@@ -34,6 +39,8 @@ impl Id {
         Ok(Id { bytes: tmp })
     }
 
+    /// Generates a random Id for a mainline DHT node with the provided IP address.
+    /// The generated Id will be valid with respect to [BEP0042](http://bittorrent.org/beps/bep_0042.html).
     pub fn from_ip(ip: &IpAddr) -> Id {
         let mut rng = thread_rng();
         let r: u8 = rng.gen();
@@ -53,7 +60,8 @@ impl Id {
         return Id { bytes: bytes };
     }
 
-    // Generates a random id
+    /// Generates a completely random Id. The returned Id is *not* guaranteed to be
+    /// valid with respect to [BEP0042](http://bittorrent.org/beps/bep_0042.html).
     pub fn from_random<T: rand::RngCore>(rng: &mut T) -> Id {
         let mut bytes: [u8; ID_SIZE] = [0; ID_SIZE];
         rng.fill_bytes(&mut bytes);
@@ -61,10 +69,15 @@ impl Id {
         return Id { bytes: bytes };
     }
 
+    /// Copies the byes that make up the Id and returns them in a Vec
     pub fn to_vec(&self) -> Vec<u8> {
         self.bytes.to_vec()
     }
 
+    /// Evaluates the Id and decides if it's a valid Id for a DHT node with the
+    /// provided IP address (based on [BEP0042](http://bittorrent.org/beps/bep_0042.html)).
+    /// Note: the current implementation does not handle non-globally-routable address space
+    /// properly. It will likely return false for non-routable IPv4 address space (against the spec).
     pub fn is_valid_for_ip(&self, ip: &IpAddr) -> bool {
         // TODO return true if ip is not globally routable
         if ip.is_loopback() {
@@ -76,7 +89,10 @@ impl Id {
         return expected == actual;
     }
 
-    // Returns the number of bits of prefix that the two ids have in common
+    /// Returns the number of bits of prefix that the two ids have in common.
+    ///
+    /// Consider two Ids with binary values `10100000` and `10100100`. This function
+    /// would return `5` because the Ids share the common 5-bit prefix `10100`.
     pub fn matching_prefix_bits(&self, other: &Self) -> usize {
         let xored = self.xor(&other);
         let mut to_ret: usize = 0;
@@ -96,6 +112,9 @@ impl Id {
         return to_ret;
     }
 
+    /// Creates an Id from a hex string.
+    ///
+    /// For example: `let id = Id::from_hex("88ffb73943354a00dc2dadd14c54d28020a513c8").unwrap();`
     pub fn from_hex(h: &str) -> Result<Id, RustyDHTError> {
         let bytes =
             hex::decode(h).map_err(|hex_err| RustyDHTError::PacketParseError(hex_err.into()))?;
@@ -103,6 +122,10 @@ impl Id {
         Id::from_bytes(&bytes)
     }
 
+    /// Computes the exclusive or (XOR) of this Id with another. The BitTorrent DHT
+    /// uses XOR as its distance metric.
+    ///
+    /// Example: `let distance_between_nodes = id.xor(other_id);`
     pub fn xor(&self, other: &Id) -> Id {
         let mut bytes: [u8; ID_SIZE] = [0; ID_SIZE];
         for i in 0..ID_SIZE {
@@ -113,12 +136,20 @@ impl Id {
     }
 
     /// Makes a new id that's similar to this one.
-    pub fn make_mutant(&self) -> Id {
+    /// `identical_bytes` specifies how many bytes of the resulting Id should be the same as `this`.
+    /// `identical_bytes` must be in the range (0, [ID_SIZE](crate::common::ID_SIZE)) otherwise Err
+    /// is returned.
+    pub fn make_mutant(&self, identical_bytes: usize) -> Result<Id, RustyDHTError> {
+        if identical_bytes <= 0 || identical_bytes >= ID_SIZE {
+            return Err(RustyDHTError::GeneralError(anyhow!(
+                "identical_bytes must be in range (0, ID_SIZE)"
+            )));
+        }
         let mut mutant = Id::from_random(&mut thread_rng());
-        for i in 0..4 {
+        for i in 0..identical_bytes {
             mutant.bytes[i] = self.bytes[i];
         }
-        mutant
+        Ok(mutant)
     }
 }
 
