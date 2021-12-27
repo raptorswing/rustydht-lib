@@ -1,10 +1,13 @@
 [package]
 name = "rustydht-lib"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["raptorswing"]
 edition = "2018"
 description = "A library for interacting with BitTorrent's mainline DHT."
+homepage = "https://github.com/raptorswing/rustydht-lib"
 license = "MIT"
+keywords = ["bittorrent", "torrent", "dht", "kademlia", "mainline"]
+categories = ["network-programming"]
 repository = "https://github.com/raptorswing/rustydht-lib"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
