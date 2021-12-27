@@ -44,6 +44,7 @@ struct DHTState {
     subscribers: Vec<mpsc::Sender<DHTEvent>>,
 }
 
+/// This struct is the heart of the library - contains data structure and business logic to run a DHT node.
 pub struct DHT {
     socket: Arc<DHTSocket>,
 

@@ -1,3 +1,11 @@
+/// Struct that represents configuration for DHT that, in general, does
+/// not change after the DHT is started.
+///
+/// You'll probably want one of these to pass into [DHT::new()](crate::dht::DHT::new).
+///
+/// Use [DHTSettings::default()](crate::dht::DHTSettings::default) to create an instance with the
+/// 'recommended' defaults (which can be customized). Or instantiate your own
+/// with `let settings = DHTSettings {/* your settings here */};`
 pub struct DHTSettings {
     /// Number of bytes for token secrets for get_peers responses
     pub token_secret_size: usize,

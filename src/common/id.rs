@@ -10,15 +10,16 @@ use std::net::IpAddr;
 
 use crate::errors::RustyDHTError;
 
+/// The length (in bytes) of BitTorrent info hashes and DHT node ids.
 pub const ID_SIZE: usize = 20;
 
+/// Represents the id of a [Node](crate::common::Node) or a BitTorrent info-hash. Basically, it's a
+/// 20-byte identifier.
 #[derive(Eq, PartialEq, Copy, Clone)]
 pub struct Id {
     bytes: [u8; ID_SIZE],
 }
 
-/// Represents the id of a Node or a BitTorrent info-hash. Basically, it's a
-/// 20-byte identifier.
 impl Id {
     /// Create a new Id from some bytes. Returns Err if `bytes` is not of length
     /// [ID_SIZE](crate::common::ID_SIZE).
