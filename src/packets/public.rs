@@ -485,13 +485,13 @@ impl Message {
         return Some(id);
     }
 
-    pub fn create_ping_request(requester_id: Id) -> Message {
+    pub fn create_ping_request(requester_id: Id, read_only: bool) -> Message {
         let mut rng = thread_rng();
         Message {
             transaction_id: vec![rng.gen(), rng.gen()],
             version: None,
             requester_ip: None,
-            read_only: None,
+            read_only: if read_only { Some(true) } else { None },
             message_type: MessageType::Request(RequestSpecific::PingRequest(
                 PingRequestArguments {
                     requester_id: requester_id,
@@ -517,13 +517,13 @@ impl Message {
         }
     }
 
-    pub fn create_get_peers_request(requester_id: Id, info_hash: Id) -> Message {
+    pub fn create_get_peers_request(requester_id: Id, info_hash: Id, read_only: bool) -> Message {
         let mut rng = thread_rng();
         Message {
             transaction_id: vec![rng.gen(), rng.gen()],
             version: None,
             requester_ip: None,
-            read_only: None,
+            read_only: if read_only { Some(true) } else { None },
             message_type: MessageType::Request(RequestSpecific::GetPeersRequest(
                 GetPeersRequestArguments {
                     requester_id: requester_id,
@@ -577,13 +577,13 @@ impl Message {
         }
     }
 
-    pub fn create_find_node_request(requester_id: Id, target: Id) -> Message {
+    pub fn create_find_node_request(requester_id: Id, target: Id, read_only: bool) -> Message {
         let mut rng = thread_rng();
         Message {
             transaction_id: vec![rng.gen(), rng.gen()],
             version: None,
             requester_ip: None,
-            read_only: None,
+            read_only: if read_only { Some(true) } else { None },
             message_type: MessageType::Request(RequestSpecific::FindNodeRequest(
                 FindNodeRequestArguments {
                     requester_id: requester_id,
@@ -693,6 +693,12 @@ pub fn response_matches_request(res: &ResponseSpecific, req: &RequestSpecific) -
 
         ResponseSpecific::FindNodeResponse { .. } => {
             if let RequestSpecific::FindNodeRequest { .. } = req {
+                return true;
+            }
+        }
+
+        ResponseSpecific::GetPeersResponse { .. } => {
+            if let RequestSpecific::GetPeersRequest { .. } = req {
                 return true;
             }
         }

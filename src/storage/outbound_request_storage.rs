@@ -146,7 +146,7 @@ mod tests {
         let mut storage = OutboundRequestStorage::new();
 
         let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
-        let req = Message::create_ping_request(our_id);
+        let req = Message::create_ping_request(our_id, false);
 
         let request_target_addr = "127.0.0.1:1234".parse().unwrap();
         let request_info = RequestInfo::new(request_target_addr, None, req.clone(), None);
@@ -186,8 +186,8 @@ mod tests {
         let mut storage = OutboundRequestStorage::new();
 
         let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
-        let req = Message::create_ping_request(our_id);
-        let req_2 = Message::create_ping_request(our_id);
+        let req = Message::create_ping_request(our_id, false);
+        let req_2 = Message::create_ping_request(our_id, false);
 
         let request_info =
             RequestInfo::new("127.0.0.1:1234".parse().unwrap(), None, req.clone(), None);

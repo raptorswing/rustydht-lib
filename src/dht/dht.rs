@@ -195,6 +195,38 @@ impl DHT {
         }
     }
 
+    pub async fn send_get_peers(
+        &self,
+        info_hash: Id,
+        dest: SocketAddr,
+        dest_id: Option<Id>,
+    ) -> Result<packets::Message, RustyDHTError> {
+        DHT::get_peers_impl(self.state.clone(), self.socket.clone(), info_hash, dest, dest_id).await
+    }
+
+    /// Have our DHT node send a [Message](crate::packets::Message), awaits and returns a response.
+    ///
+    /// Note that this doesn't implement any timeout behavior - it will await responses
+    /// indefinitely. If you need timeouts you must wrap this in a tokio Timeout or
+    /// similar.
+    pub async fn send_request(
+        &self,
+        req: packets::Message,
+        dest: SocketAddr,
+        dest_id: Option<Id>,
+    ) -> Result<packets::Message, RustyDHTError> {
+        let mut reply_channel = self
+            .socket
+            .send_to(req, dest, dest_id)
+            .await?
+            .expect("Didn't receive reply notification channel");
+
+        match reply_channel.recv().await {
+            Some(reply) => Ok(reply),
+            None => Err(RustyDHTError::GeneralError(anyhow!("sender hung up!?"))),
+        }
+    }
+
     /// Subscribe to DHTEvent notifications from the DHT.
     ///
     /// When you're sick of receiving events from the DHT, just drop the receiver.
@@ -531,6 +563,47 @@ impl DHT {
         return Ok(());
     }
 
+    async fn get_peers_impl(
+        state: Arc<Mutex<DHTState>>,
+        socket: Arc<DHTSocket>,
+        info_hash: Id,
+        target: SocketAddr,
+        target_id: Option<Id>,
+    ) -> Result<packets::Message, RustyDHTError> {
+        let (our_id, read_only) = {
+            let state = state.try_lock().unwrap();
+            (state.our_id, state.settings.read_only)
+        };
+        let req = packets::Message::create_get_peers_request(our_id, info_hash, read_only);
+        let mut reply_channel = socket
+            .send_to(req, target, target_id)
+            .await?
+            .expect("Didn't receive reply notification channel");
+        match reply_channel.recv().await {
+            Some(reply) => {
+                if let packets::MessageType::Response(
+                    packets::ResponseSpecific::GetPeersResponse(arguments),
+                ) = &reply.message_type
+                {
+                    let is_id_valid = arguments.responder_id.is_valid_for_ip(&target.ip());
+                    if is_id_valid {
+                        let mut state = state.try_lock().unwrap();
+                        DHT::ip4_vote_helper(&mut state, &target, &reply);
+                        state
+                            .buckets
+                            .add_or_update(Node::new(arguments.responder_id, target), true);
+                    }
+                    Ok(reply)
+                } else {
+                    Err(RustyDHTError::GeneralError(anyhow!(
+                        "Invalid response to get_peers"
+                    )))
+                }
+            }
+            None => Err(RustyDHTError::GeneralError(anyhow!("sender hung up!?"))),
+        }
+    }
+
     async fn periodic_buddy_ping(
         &self,
         shutdown: shutdown::ShutdownReceiver,
@@ -746,11 +819,11 @@ impl DHT {
         target: SocketAddr,
         target_id: Option<Id>,
     ) -> Result<packets::Message, RustyDHTError> {
-        let our_id = {
+        let (our_id, read_only) = {
             let state = state.try_lock().unwrap();
-            state.our_id
+            (state.our_id, state.settings.read_only)
         };
-        let req = packets::Message::create_ping_request(our_id);
+        let req = packets::Message::create_ping_request(our_id, read_only);
         let mut reply_channel = socket
             .send_to(req, target, target_id)
             .await?
@@ -877,8 +950,11 @@ impl DHT {
         dest_id: Option<Id>,
         target: Id,
     ) -> Result<packets::Message, RustyDHTError> {
-        let our_id = state.try_lock().unwrap().our_id;
-        let req = packets::Message::create_find_node_request(our_id, target);
+        let (our_id, read_only) = {
+            let state = state.try_lock().unwrap();
+            (state.our_id, state.settings.read_only)
+        };
+        let req = packets::Message::create_find_node_request(our_id, target, read_only);
         let mut reply_channel = socket
             .send_to(req, dest, dest_id)
             .await?
@@ -990,7 +1066,7 @@ mod test {
     #[tokio::test]
     async fn test_responds_to_ping() -> Result<(), RustyDHTError> {
         let requester_id = Id::from_random(&mut thread_rng());
-        let ping_request = packets::Message::create_ping_request(requester_id);
+        let ping_request = packets::Message::create_ping_request(requester_id, false);
 
         let port = 1948;
         let (dht, mut shutdown_tx, shutdown_rx) = make_test_dht(port).await;
@@ -1024,12 +1100,12 @@ mod test {
     async fn test_responds_to_get_peers() -> Result<(), RustyDHTError> {
         let requester_id = Id::from_random(&mut thread_rng());
         let desired_info_hash = Id::from_random(&mut thread_rng());
-        let request = packets::Message::create_get_peers_request(requester_id, desired_info_hash);
+        let request = packets::Message::create_get_peers_request(requester_id, desired_info_hash, false);
 
         let port = 1974;
         let (dht, mut shutdown_tx, shutdown_rx) = make_test_dht(port).await;
         shutdown::ShutdownReceiver::spawn_with_shutdown(
-            shutdown_rx,
+            shutdown_rx, 
             async move {
                 dht.run_event_loop().await.unwrap();
             },
@@ -1067,7 +1143,7 @@ mod test {
 
         let requester_id = Id::from_random(&mut thread_rng());
         let target = Id::from_random(&mut thread_rng());
-        let request = packets::Message::create_find_node_request(requester_id, target);
+        let request = packets::Message::create_find_node_request(requester_id, target, false);
         let res = send_and_receive(request.clone(), port).await.unwrap();
 
         assert_eq!(res.transaction_id, request.transaction_id);
@@ -1100,7 +1176,7 @@ mod test {
 
         // Send a get_peers request and get the response
         let reply = send_and_receive(
-            packets::Message::create_get_peers_request(requester_id, info_hash),
+            packets::Message::create_get_peers_request(requester_id, info_hash, false),
             port,
         )
         .await
@@ -1142,7 +1218,7 @@ mod test {
 
         // Send get peers again - this time we'll get a peer back (ourselves)
         let reply = send_and_receive(
-            packets::Message::create_get_peers_request(requester_id, info_hash),
+            packets::Message::create_get_peers_request(requester_id, info_hash, false),
             port,
         )
         .await

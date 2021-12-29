@@ -9,3 +9,5 @@ pub use dht_settings::*;
 pub mod dht_event;
 
 mod socket;
+
+pub mod operations;
