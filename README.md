@@ -1,8 +1,12 @@
 # rustydht-lib
 
-[![Rust](https://github.com/raptorswing/rustydht-lib/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/raptorswing/rustydht-lib/actions/workflows/rust.yml)
+[![Build Status](https://github.com/raptorswing/rustydht-lib/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/raptorswing/rustydht-lib/actions/workflows/rust.yml)
+[![crates.io](https://img.shields.io/crates/v/rustydht-lib)](https://crates.io/crates/rustydht-lib)
+[![License](https://img.shields.io/crates/l/rustydht-lib)](https://github.com/raptorswing/rustydht-lib/blob/v1.0.0/LICENSE)
 
-A rust library for interacting with BitTorrent's mainline DHT. A work in progress.
+A rust library for interacting with BitTorrent's mainline DHT. This is a work in progress and the public API is likely to change frequently.
+
+**[API Docs](https://docs.rs/rustydht-lib/latest/rustydht_lib/)**
 
 ## Supported BEPs
 - [x] [BEP0005 (DHT Protocol)](http://bittorrent.org/beps/bep_0005.html)
