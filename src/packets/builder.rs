@@ -2,6 +2,7 @@ use crate::common::{Id, Node};
 use crate::errors::RustyDHTError;
 use crate::packets;
 use rand::prelude::*;
+use std::convert::TryInto;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -9,17 +10,20 @@ use std::time::Duration;
 ///
 /// # Example
 /// ```
+/// use rustydht_lib::common::Id;
+/// use rustydht_lib::packets::MessageBuilder;
+///
 /// let client_id = Id::from_hex("0000000000000000000000000000000000000001").unwrap();
 /// let server_id = Id::from_hex("0000000000000000000000000000000000000002").unwrap();
 ///
 /// // To build a ping request
-/// let ping_req = builder(BuilderMessageType::PingRequest)
+/// let ping_req = MessageBuilder::new_ping_request()
 ///     .sender_id(client_id)
 ///     .build()
 ///     .unwrap();
 ///
 /// // To build a ping response
-/// let ping_res = builder(BuilderMessageType::PingResponse)
+/// let ping_res = MessageBuilder::new_ping_response()
 ///     .sender_id(server_id)
 ///     .transaction_id(ping_req.transaction_id.clone())
 ///     .build()
@@ -42,13 +46,13 @@ pub struct MessageBuilder {
     peers: Option<Vec<SocketAddr>>,
     interval: Option<Duration>,
     samples: Option<Vec<Id>>,
-    num_infohashes: Option<i32>,
+    num_infohashes: Option<usize>,
     code: Option<i32>,
     description: Option<String>,
 }
 
 /// All the different types of Message that a MesssageBuilder can build
-pub enum BuilderMessageType {
+enum BuilderMessageType {
     PingRequest,
     PingResponse,
     FindNodeRequest,
@@ -62,30 +66,84 @@ pub enum BuilderMessageType {
     Error,
 }
 
-/// Creates a new MessageBuilder for the provided DHT message type.
-pub fn builder(message_type: BuilderMessageType) -> MessageBuilder {
-    MessageBuilder {
-        message_type: message_type,
-        transaction_id: None,
-        version: None,
-        requester_ip: None,
-        read_only: None,
-        sender_id: None,
-        target: None,
-        port: None,
-        implied_port: None,
-        token: None,
-        nodes: None,
-        peers: None,
-        interval: None,
-        samples: None,
-        num_infohashes: None,
-        code: None,
-        description: None,
-    }
-}
-
 impl MessageBuilder {
+    /// Create a new MessageBuilder for a ping request
+    pub fn new_ping_request() -> MessageBuilder {
+        MessageBuilder::new(BuilderMessageType::PingRequest)
+    }
+
+    /// Create a new MessageBuilder for a ping response
+    pub fn new_ping_response() -> MessageBuilder {
+        MessageBuilder::new(BuilderMessageType::PingResponse)
+    }
+
+    /// Create a new MessageBuilder for a find_node request
+    pub fn new_find_node_request() -> MessageBuilder {
+        MessageBuilder::new(BuilderMessageType::FindNodeRequest)
+    }
+
+    /// Create a new MessageBuilder for a find_node response
+    pub fn new_find_node_response() -> MessageBuilder {
+        MessageBuilder::new(BuilderMessageType::FindNodeResponse)
+    }
+
+    /// Create a new MessageBuilder for a get_peers request
+    pub fn new_get_peers_request() -> MessageBuilder {
+        MessageBuilder::new(BuilderMessageType::GetPeersRequest)
+    }
+
+    /// Create a new MessageBuilder for a get_peers response
+    pub fn new_get_peers_response() -> MessageBuilder {
+        MessageBuilder::new(BuilderMessageType::GetPeersResponse)
+    }
+
+    /// Create a new MessageBuilder for an announce_peer request
+    pub fn new_announce_peer_request() -> MessageBuilder {
+        MessageBuilder::new(BuilderMessageType::AnnouncePeerRequest)
+    }
+
+    /// Create a new MessageBuilder for an announce_peer response
+    pub fn new_announce_peer_response() -> MessageBuilder {
+        MessageBuilder::new(BuilderMessageType::AnnouncePeerResponse)
+    }
+
+    /// Create a new MessageBuilder for a sample_infohashes request
+    pub fn new_sample_infohashes_request() -> MessageBuilder {
+        MessageBuilder::new(BuilderMessageType::SampleInfoHashesRequest)
+    }
+
+    /// Create a new MessageBuilder for a sample_infohashes response
+    pub fn new_sample_infohashes_response() -> MessageBuilder {
+        MessageBuilder::new(BuilderMessageType::SampleInfoHashesResponse)
+    }
+
+    /// Create a new MessageBuilder for an error
+    pub fn new_error() -> MessageBuilder {
+        MessageBuilder::new(BuilderMessageType::Error)
+    }
+
+    fn new(message_type: BuilderMessageType) -> MessageBuilder {
+        MessageBuilder {
+            message_type: message_type,
+            transaction_id: None,
+            version: None,
+            requester_ip: None,
+            read_only: None,
+            sender_id: None,
+            target: None,
+            port: None,
+            implied_port: None,
+            token: None,
+            nodes: None,
+            peers: None,
+            interval: None,
+            samples: None,
+            num_infohashes: None,
+            code: None,
+            description: None,
+        }
+    }
+
     /// Set the transaction id of the packet. If one is not specified,
     /// generated requests will get a random transaction id and responses
     /// will receive an error.
@@ -191,7 +249,7 @@ impl MessageBuilder {
 
     /// Set the number of info_hashes as reported in sample_infohashes
     /// responses.
-    pub fn num_infohashes(mut self, num: i32) -> Self {
+    pub fn num_infohashes(mut self, num: usize) -> Self {
         self.num_infohashes = Some(num);
         self
     }
@@ -394,7 +452,12 @@ impl MessageBuilder {
                     responder_id: required_or_error!(self, sender_id),
                     interval: required_or_error!(self, interval),
                     nodes: required_or_error!(self, nodes),
-                    num: required_or_error!(self, num_infohashes),
+                    num: match self.num_infohashes {
+                        Some(num) => num.try_into().unwrap(),
+                        None => {
+                            return Err(RustyDHTError::BuilderMissingFieldError("num_infohashes"));
+                        }
+                    },
                     samples: required_or_error!(self, samples),
                 }
             )
@@ -422,7 +485,7 @@ mod test {
     #[test]
     fn test_sender_id_is_required_in_requests() {
         let transaction_id = vec![0, 1, 2, 3];
-        let err = builder(BuilderMessageType::PingRequest)
+        let err = MessageBuilder::new_ping_request()
             .transaction_id(transaction_id)
             .build();
         assert!(err.is_err());
@@ -435,7 +498,7 @@ mod test {
     #[test]
     fn test_sender_id_is_required_in_responses() {
         let transaction_id = vec![0, 1, 2, 3];
-        let err = builder(BuilderMessageType::PingResponse)
+        let err = MessageBuilder::new_ping_response()
             .transaction_id(transaction_id)
             .build();
         assert!(err.is_err());
@@ -448,9 +511,7 @@ mod test {
     #[test]
     fn test_transaction_id_optional_in_requests() {
         let our_id = Id::from_hex("0000000000000000000011111111111111111111").unwrap();
-        let b = builder(BuilderMessageType::PingRequest)
-            .sender_id(our_id)
-            .build();
+        let b = MessageBuilder::new_ping_request().sender_id(our_id).build();
         assert!(b.is_ok());
         assert!(b.unwrap().transaction_id.len() > 0);
     }
@@ -458,7 +519,7 @@ mod test {
     #[test]
     fn test_transaction_id_required_in_responses() {
         let our_id = Id::from_hex("0000000000000000000011111111111111111111").unwrap();
-        let err = builder(BuilderMessageType::PingResponse)
+        let err = MessageBuilder::new_ping_response()
             .sender_id(our_id)
             .build();
         assert!(err.is_err());
@@ -471,7 +532,7 @@ mod test {
     #[test]
     fn test_version_field_populated() {
         let our_id = Id::from_hex("0000000000000000000011111111111111111111").unwrap();
-        let b = builder(BuilderMessageType::PingRequest)
+        let b = MessageBuilder::new_ping_request()
             .sender_id(our_id)
             .version(vec![6, 6, 6])
             .build();
@@ -482,7 +543,7 @@ mod test {
     #[test]
     fn test_requester_ip_pointless_on_requests() {
         let our_id = Id::from_hex("0000000000000000000011111111111111111111").unwrap();
-        let b = builder(BuilderMessageType::PingRequest)
+        let b = MessageBuilder::new_ping_request()
             .sender_id(our_id)
             .requester_ip("1.0.1.0:53".parse().unwrap())
             .build();
@@ -493,7 +554,7 @@ mod test {
     #[test]
     fn test_requester_ip_useful_on_responses() {
         let our_id = Id::from_hex("0000000000000000000011111111111111111111").unwrap();
-        let b = builder(BuilderMessageType::PingResponse)
+        let b = MessageBuilder::new_ping_response()
             .sender_id(our_id)
             .requester_ip("1.0.1.0:53".parse().unwrap())
             .transaction_id(vec![1])
@@ -505,7 +566,7 @@ mod test {
     #[test]
     fn test_read_only_useful_on_requests() {
         let our_id = Id::from_hex("0000000000000000000011111111111111111111").unwrap();
-        let b = builder(BuilderMessageType::PingRequest)
+        let b = MessageBuilder::new_ping_request()
             .sender_id(our_id)
             .read_only(true)
             .build();
@@ -516,7 +577,7 @@ mod test {
     #[test]
     fn test_read_only_pointless_on_responses() {
         let our_id = Id::from_hex("0000000000000000000011111111111111111111").unwrap();
-        let b = builder(BuilderMessageType::PingResponse)
+        let b = MessageBuilder::new_ping_response()
             .sender_id(our_id)
             .read_only(true)
             .transaction_id(vec![1])
@@ -530,7 +591,7 @@ mod test {
         let our_id = Id::from_hex("0000000000000000000011111111111111111111").unwrap();
         let transaction_id = vec![0, 1, 2, 3];
         assert_eq!(
-            builder(BuilderMessageType::PingRequest)
+            MessageBuilder::new_ping_request()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
                 .build()
@@ -554,7 +615,7 @@ mod test {
         let our_id = Id::from_hex("0000000000000000000011111111111111111111").unwrap();
         let transaction_id = vec![0, 1, 2, 3];
         assert_eq!(
-            builder(BuilderMessageType::PingResponse)
+            MessageBuilder::new_ping_response()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
                 .build()
@@ -579,7 +640,7 @@ mod test {
         let target = Id::from_hex("1111111111111111111100000000000000000000").unwrap();
         let transaction_id = vec![0, 1, 2, 3];
         assert_eq!(
-            builder(BuilderMessageType::FindNodeRequest)
+            MessageBuilder::new_find_node_request()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
                 .target(target.clone())
@@ -606,7 +667,7 @@ mod test {
         let transaction_id = vec![0, 1, 2, 3];
         let nodes = vec![Node::new(our_id.clone(), "1.2.3.4:53".parse().unwrap())];
         assert_eq!(
-            builder(BuilderMessageType::FindNodeResponse)
+            MessageBuilder::new_find_node_response()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
                 .nodes(nodes.clone())
@@ -635,7 +696,7 @@ mod test {
         let target = Id::from_hex("1111111111111111111100000000000000000000").unwrap();
         let transaction_id = vec![0, 1, 2, 3];
         assert_eq!(
-            builder(BuilderMessageType::GetPeersRequest)
+            MessageBuilder::new_get_peers_request()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
                 .target(target.clone())
@@ -663,7 +724,7 @@ mod test {
         let nodes = vec![Node::new(our_id.clone(), "1.2.3.4:53".parse().unwrap())];
         let token = vec![45, 56];
         assert_eq!(
-            builder(BuilderMessageType::GetPeersResponse)
+            MessageBuilder::new_get_peers_response()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
                 .nodes(nodes.clone())
@@ -695,7 +756,7 @@ mod test {
         let peers = vec!["1.2.3.4:53".parse().unwrap()];
         let token = vec![45, 56];
         assert_eq!(
-            builder(BuilderMessageType::GetPeersResponse)
+            MessageBuilder::new_get_peers_response()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
                 .peers(peers.clone())
@@ -728,7 +789,7 @@ mod test {
         let peers = vec!["1.2.3.4:53".parse().unwrap()];
         let token = vec![45, 56];
         assert_eq!(
-            builder(BuilderMessageType::GetPeersResponse)
+            MessageBuilder::new_get_peers_response()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
                 .peers(peers.clone())
@@ -761,7 +822,7 @@ mod test {
         let transaction_id = vec![0, 1, 2, 3];
         let token = vec![6, 6, 6];
         assert_eq!(
-            builder(BuilderMessageType::AnnouncePeerRequest)
+            MessageBuilder::new_announce_peer_request()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
                 .target(target.clone())
@@ -796,7 +857,7 @@ mod test {
         let transaction_id = vec![0, 1, 2, 3];
         let token = vec![6, 6, 6];
         assert_eq!(
-            builder(BuilderMessageType::AnnouncePeerRequest)
+            MessageBuilder::new_announce_peer_request()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
                 .target(target.clone())
@@ -830,7 +891,7 @@ mod test {
         let transaction_id = vec![0, 1, 2, 3];
         let token = vec![6, 6, 6];
         assert!(matches!(
-            builder(BuilderMessageType::AnnouncePeerRequest)
+            MessageBuilder::new_announce_peer_request()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
                 .target(target.clone())
@@ -847,7 +908,7 @@ mod test {
         let our_id = Id::from_hex("0000000000000000000011111111111111111111").unwrap();
         let transaction_id = vec![0, 1, 2, 3];
         assert_eq!(
-            builder(BuilderMessageType::AnnouncePeerResponse)
+            MessageBuilder::new_announce_peer_response()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
                 .build()
@@ -872,7 +933,7 @@ mod test {
         let target = Id::from_hex("1111111111111111111100000000000000000000").unwrap();
         let transaction_id = vec![0, 1, 2, 3];
         assert_eq!(
-            builder(BuilderMessageType::SampleInfoHashesRequest)
+            MessageBuilder::new_sample_infohashes_request()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
                 .target(target.clone())
@@ -902,7 +963,7 @@ mod test {
         let nodes = vec![Node::new(our_id.clone(), "1.2.3.4:53".parse().unwrap())];
         let samples = vec![Id::from_hex("2222222222222222222233333333333333333333").unwrap()];
         assert_eq!(
-            builder(BuilderMessageType::SampleInfoHashesResponse)
+            MessageBuilder::new_sample_infohashes_response()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
                 .interval(Duration::from_secs(30))
@@ -938,7 +999,7 @@ mod test {
         let description = "Oh no";
 
         assert_eq!(
-            builder(BuilderMessageType::Error)
+            MessageBuilder::new_error()
                 .transaction_id(transaction_id.clone())
                 .code(code)
                 .description(description.to_string())
