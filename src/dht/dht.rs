@@ -26,6 +26,7 @@ use crate::dht::socket::DHTSocket;
 use crate::dht::DHTSettings;
 use crate::errors::RustyDHTError;
 use crate::packets;
+use crate::packets::MessageBuilder;
 use crate::shutdown;
 use crate::storage::node_bucket_storage::NodeStorage;
 use crate::storage::node_wrapper::NodeWrapper;
@@ -277,11 +278,11 @@ impl DHT {
                         }
 
                         // Build a ping reply
-                        let reply = packets::Message::create_ping_response(
-                            self.state.try_lock().unwrap().our_id,
-                            msg.transaction_id.clone(),
-                            addr,
-                        );
+                        let reply = MessageBuilder::new_ping_response()
+                            .sender_id(self.state.try_lock().unwrap().our_id)
+                            .transaction_id(msg.transaction_id.clone())
+                            .requester_ip(addr)
+                            .build()?;
                         self.socket
                             .send_to(reply, addr, Some(arguments.requester_id))
                             .await?;
@@ -322,22 +323,22 @@ impl DHT {
                                         Some(&arguments.requester_id),
                                     );
 
-                                    packets::Message::create_get_peers_response_no_peers(
-                                        state.our_id.clone(),
-                                        msg.transaction_id,
-                                        addr,
-                                        token.to_vec(),
-                                        nearest,
-                                    )
+                                    MessageBuilder::new_get_peers_response()
+                                        .sender_id(state.our_id.clone())
+                                        .transaction_id(msg.transaction_id)
+                                        .requester_ip(addr)
+                                        .token(token.to_vec())
+                                        .nodes(nearest)
+                                        .build()?
                                 }
 
-                                _ => packets::Message::create_get_peers_response_peers(
-                                    state.our_id.clone(),
-                                    msg.transaction_id,
-                                    addr,
-                                    token.to_vec(),
-                                    peers,
-                                ),
+                                _ => MessageBuilder::new_get_peers_response()
+                                    .sender_id(state.our_id.clone())
+                                    .transaction_id(msg.transaction_id)
+                                    .requester_ip(addr)
+                                    .token(token.to_vec())
+                                    .peers(peers)
+                                    .build()?,
                             };
                             reply
                         };
@@ -365,12 +366,12 @@ impl DHT {
                                 &arguments.target,
                                 Some(&arguments.requester_id),
                             );
-                            packets::Message::create_find_node_response(
-                                state.our_id.clone(),
-                                msg.transaction_id,
-                                addr,
-                                nearest,
-                            )
+                            MessageBuilder::new_find_node_response()
+                                .sender_id(state.our_id.clone())
+                                .transaction_id(msg.transaction_id)
+                                .requester_ip(addr)
+                                .nodes(nearest)
+                                .build()?
                         };
 
                         self.socket
@@ -414,12 +415,13 @@ impl DHT {
                                     .peer_storage
                                     .announce_peer(arguments.info_hash, sockaddr);
 
-                                // Response is same for ping, so reuse that
-                                Some(packets::Message::create_ping_response(
-                                    state.our_id,
-                                    msg.transaction_id.clone(),
-                                    addr,
-                                ))
+                                Some(
+                                    MessageBuilder::new_announce_peer_response()
+                                        .sender_id(state.our_id)
+                                        .transaction_id(msg.transaction_id.clone())
+                                        .requester_ip(addr)
+                                        .build()?,
+                                )
                             } else {
                                 None
                             }
@@ -470,17 +472,17 @@ impl DHT {
                                 (info_hashes, total_info_hashes)
                             };
 
-                            packets::Message::create_sample_infohashes_response(
-                                state.our_id,
-                                msg.transaction_id,
-                                addr,
-                                Duration::from_secs(
+                            MessageBuilder::new_sample_infohashes_response()
+                                .sender_id(state.our_id)
+                                .transaction_id(msg.transaction_id)
+                                .requester_ip(addr)
+                                .interval(Duration::from_secs(
                                     state.settings.min_sample_interval_secs.try_into().unwrap(),
-                                ),
-                                nearest,
-                                info_hashes,
-                                total_info_hashes,
-                            )
+                                ))
+                                .nodes(nearest)
+                                .samples(info_hashes)
+                                .num_infohashes(total_info_hashes)
+                                .build()?
                         };
 
                         self.socket
@@ -750,7 +752,9 @@ impl DHT {
             let state = state.try_lock().unwrap();
             state.our_id
         };
-        let req = packets::Message::create_ping_request(our_id);
+        let req = MessageBuilder::new_ping_request()
+            .sender_id(our_id)
+            .build()?;
         let mut reply_channel = socket
             .send_to(req, target, target_id)
             .await?
@@ -878,7 +882,10 @@ impl DHT {
         target: Id,
     ) -> Result<packets::Message, RustyDHTError> {
         let our_id = state.try_lock().unwrap().our_id;
-        let req = packets::Message::create_find_node_request(our_id, target);
+        let req = MessageBuilder::new_find_node_request()
+            .sender_id(our_id)
+            .target(target)
+            .build()?;
         let mut reply_channel = socket
             .send_to(req, dest, dest_id)
             .await?
@@ -990,7 +997,9 @@ mod test {
     #[tokio::test]
     async fn test_responds_to_ping() -> Result<(), RustyDHTError> {
         let requester_id = Id::from_random(&mut thread_rng());
-        let ping_request = packets::Message::create_ping_request(requester_id);
+        let ping_request = MessageBuilder::new_ping_request()
+            .sender_id(requester_id)
+            .build()?;
 
         let port = 1948;
         let (dht, mut shutdown_tx, shutdown_rx) = make_test_dht(port).await;
@@ -1024,7 +1033,10 @@ mod test {
     async fn test_responds_to_get_peers() -> Result<(), RustyDHTError> {
         let requester_id = Id::from_random(&mut thread_rng());
         let desired_info_hash = Id::from_random(&mut thread_rng());
-        let request = packets::Message::create_get_peers_request(requester_id, desired_info_hash);
+        let request = MessageBuilder::new_get_peers_request()
+            .sender_id(requester_id)
+            .target(desired_info_hash)
+            .build()?;
 
         let port = 1974;
         let (dht, mut shutdown_tx, shutdown_rx) = make_test_dht(port).await;
@@ -1067,7 +1079,10 @@ mod test {
 
         let requester_id = Id::from_random(&mut thread_rng());
         let target = Id::from_random(&mut thread_rng());
-        let request = packets::Message::create_find_node_request(requester_id, target);
+        let request = MessageBuilder::new_find_node_request()
+            .sender_id(requester_id)
+            .target(target)
+            .build()?;
         let res = send_and_receive(request.clone(), port).await.unwrap();
 
         assert_eq!(res.transaction_id, request.transaction_id);
@@ -1100,7 +1115,10 @@ mod test {
 
         // Send a get_peers request and get the response
         let reply = send_and_receive(
-            packets::Message::create_get_peers_request(requester_id, info_hash),
+            MessageBuilder::new_get_peers_request()
+                .sender_id(requester_id)
+                .target(info_hash)
+                .build()?,
             port,
         )
         .await
@@ -1120,13 +1138,12 @@ mod test {
 
         // Send an announce_peer request and get the response
         let reply = send_and_receive(
-            packets::Message::create_announce_peer_request(
-                requester_id,
-                info_hash,
-                1234,
-                false,
-                token,
-            ),
+            MessageBuilder::new_announce_peer_request()
+                .sender_id(requester_id)
+                .target(info_hash)
+                .port(1234)
+                .token(token)
+                .build()?,
             port,
         )
         .await
@@ -1142,7 +1159,10 @@ mod test {
 
         // Send get peers again - this time we'll get a peer back (ourselves)
         let reply = send_and_receive(
-            packets::Message::create_get_peers_request(requester_id, info_hash),
+            MessageBuilder::new_get_peers_request()
+                .sender_id(requester_id)
+                .target(info_hash)
+                .build()?,
             port,
         )
         .await
@@ -1176,7 +1196,10 @@ mod test {
     async fn test_responds_to_sample_infohashes() -> Result<(), RustyDHTError> {
         let requester_id = Id::from_random(&mut thread_rng());
         let target = Id::from_random(&mut thread_rng());
-        let request = packets::Message::create_sample_infohashes_request(requester_id, target);
+        let request = MessageBuilder::new_sample_infohashes_request()
+            .sender_id(requester_id)
+            .target(target)
+            .build()?;
 
         let port = 2037;
         let (dht, mut shutdown_tx, shutdown_rx) = make_test_dht(port).await;

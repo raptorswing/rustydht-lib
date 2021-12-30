@@ -138,15 +138,17 @@ impl RequestInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use crate::packets::Message;
+    use crate::packets::MessageBuilder;
 
     #[test]
     fn test_outbound_request_storage() {
         let mut storage = OutboundRequestStorage::new();
 
         let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
-        let req = Message::create_ping_request(our_id);
+        let req = MessageBuilder::new_ping_request()
+            .sender_id(our_id)
+            .build()
+            .unwrap();
 
         let request_target_addr = "127.0.0.1:1234".parse().unwrap();
         let request_info = RequestInfo::new(request_target_addr, None, req.clone(), None);
@@ -156,11 +158,12 @@ mod tests {
         assert!(storage.has_request(&req.transaction_id));
 
         // Simulate a response, see if we correctly get the requet back from storage
-        let simulated_response = Message::create_ping_response(
-            our_id,
-            req.transaction_id.clone(),
-            "127.0.0.1:1235".parse().unwrap(),
-        );
+        let simulated_response = MessageBuilder::new_ping_response()
+            .sender_id(our_id)
+            .transaction_id(req.transaction_id.clone())
+            .requester_ip("127.0.0.1:1235".parse().unwrap())
+            .build()
+            .unwrap();
 
         // We should get something if the SocketAddr matches
         assert!(storage
@@ -186,8 +189,14 @@ mod tests {
         let mut storage = OutboundRequestStorage::new();
 
         let our_id = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
-        let req = Message::create_ping_request(our_id);
-        let req_2 = Message::create_ping_request(our_id);
+        let req = MessageBuilder::new_ping_request()
+            .sender_id(our_id)
+            .build()
+            .unwrap();
+        let req_2 = MessageBuilder::new_ping_request()
+            .sender_id(our_id)
+            .build()
+            .unwrap();
 
         let request_info =
             RequestInfo::new("127.0.0.1:1234".parse().unwrap(), None, req.clone(), None);

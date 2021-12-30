@@ -28,4 +28,13 @@ pub enum RustyDHTError {
     /// Don't use unless you're sure you know what you're doing.
     #[error("It's time to shutdown tasks: {0}")]
     ShutdownError(#[source] anyhow::Error),
+
+    /// Indicates that the Message type you're trying to build requires more information.
+    #[error("{0} is required")]
+    BuilderMissingFieldError(&'static str),
+
+    /// Indicates that the builder is in an invalid/ambiguous state to build the desired
+    /// Message type.
+    #[error("Builder state invalid: {0}")]
+    BuilderInvalidComboError(&'static str),
 }
