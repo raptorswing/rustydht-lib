@@ -9,6 +9,73 @@ use std::time::Duration;
 
 const MAX_SCRAPE_INTERVAL: u64 = 21600; // 6 hours
 
+/// All packets sent and received via DHT are a serialized version of this struct.
+///
+/// It can be used to represent DHT messages throughout a program and has methods to
+/// [serialize](crate::packets::Message::to_bytes) and [deserialize](crate::packets::Message::from_bytes) DHT messages.
+///
+/// # Building
+/// The easiest way to build Message structs is to use [MessageBuilder](crate::packets::MessageBuilder).
+///
+/// But if you need more control/flexibility than provided by MessageBuilder, you can build Message structs
+/// directly:
+///
+/// ```
+/// use rustydht_lib::common::Id;
+/// use rustydht_lib::packets::{Message, MessageType, RequestSpecific, FindNodeRequestArguments};
+///
+/// // This constructs a find_node request. It would be easier with MessageBuilder.
+/// let msg = Message {
+///     transaction_id: vec![1, 2, 3],
+///     version: Some(vec![0x62, 0x61, 0x72, 0x66]),
+///     requester_ip: None,
+///     read_only: None,
+///     message_type: MessageType::Request(RequestSpecific::FindNodeRequest(
+///         FindNodeRequestArguments {
+///             target: Id::from_hex("1234123412341234123412341234123412341234").unwrap(),
+///             requester_id: Id::from_hex("5678567856785678567856785678567856785678").unwrap(),
+///         },
+///     )),
+/// };
+/// ```
+///
+/// # Deserializing
+/// ```
+/// use rustydht_lib::packets::Message;
+///
+/// // Imagine that this vector contains bytes from reading from a socket
+/// let bytes: Vec<u8> = Vec::new();
+/// match Message::from_bytes(&bytes) {
+///     Ok(msg) => {
+///         // Success! do something with the Message you just parsed
+///     }
+///     Err(e) => {
+///         eprintln!("Oh no! I hit an error while parsing a Message: {}", e);
+///     }
+/// }
+/// ```
+///
+/// # Serializing
+/// ```
+/// use rustydht_lib::common::Id;
+/// use rustydht_lib::packets::{Message, MessageBuilder};
+///
+/// let our_id = Id::from_hex("0000000000000000000000000000000000000001").unwrap();
+/// let target = Id::from_hex("ff00000000000000000000000000000000000002").unwrap();
+/// let msg = MessageBuilder::new_find_node_request()
+///     .sender_id(our_id)
+///     .target(target)
+///     .build()
+///     .unwrap();
+/// match msg.to_bytes() {
+///     Ok(bytes) => {
+///         // Success! You have a Vec<u8> that can be sent over a socket or whatever
+///     }
+///     Err(e) => {
+///         eprintln!("Oh no! Couldn't serialize: {}", e);
+///     }
+/// }
+/// ```
 #[derive(Debug, PartialEq, Clone)]
 pub struct Message {
     pub transaction_id: Vec<u8>,
