@@ -135,8 +135,8 @@ pub struct SampleInfoHashesResponseArguments {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ErrorSpecific {
-    code: i32,
-    description: String,
+    pub code: i32,
+    pub description: String,
 }
 
 impl Message {
