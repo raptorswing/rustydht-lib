@@ -10,6 +10,10 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+/// Use the DHT to retrieve peers for the given info_hash.
+///
+/// This doesn't time out and will only return when it has
+/// found at least `min_peers` peers.
 pub async fn get_peers(dht: &DHT, info_hash: Id, min_peers: usize) -> Vec<SocketAddr> {
     let mut to_ret = HashSet::new();
     let mut buckets = Buckets::new(info_hash, 8);
