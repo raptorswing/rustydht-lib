@@ -77,13 +77,12 @@ async fn main() {
     tokio::select! {
         _ = dht.run_event_loop() => {},
         _ = tokio::signal::ctrl_c() => {
-            println!("Ctrl+c detected - sending shutdown signal");
+            eprintln!("Ctrl+c detected - sending shutdown signal");
             drop(dht);
             drop(shutdown_rx);
             shutdown_tx.shutdown().await;
         },
         _ = async move {
-            println!("Starting get_peers");
             let peers = operations::get_peers(&dht_clone, info_hash, 1).await;
             println!("Peers:\n{:?}", peers);
         } => {}
