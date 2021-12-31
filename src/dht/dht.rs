@@ -79,6 +79,11 @@ impl DHT {
         self.state.try_lock().unwrap().buckets.get_all_verified()
     }
 
+    /// Return a copy of the settings used by the DHT
+    pub fn get_settings(&self) -> DHTSettings {
+        self.state.try_lock().unwrap().settings.clone()
+    }
+
     /// Creates a new DHT.
     ///
     /// # Arguments
