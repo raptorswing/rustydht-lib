@@ -522,6 +522,13 @@ impl Message {
         Message::from_serde_message(internal::DHTMessage::from_bytes(bytes)?)
     }
 
+    /// Return the Id of the sender of the Message
+    ///
+    /// This is less straightforward than it seems because not *all* messages are sent
+    /// with an Id (all are except Error messages). This is reflected in the structure
+    /// of DHT Messages, and makes it a bit annoying to learn the sender's Id without
+    /// unraveling the entire message. This method is a convenience method to extract
+    /// the sender (or "author") Id from the guts of any Message.
     pub fn get_author_id(&self) -> Option<Id> {
         let id = match &self.message_type {
             MessageType::Request(request_variant) => match request_variant {
