@@ -67,8 +67,6 @@ impl DHTSocket {
         dest: SocketAddr,
         dest_id: Option<Id>,
     ) -> Result<Option<mpsc::Receiver<packets::Message>>, RustyDHTError> {
-        trace!(target: "rustydht_lib::DHTSocket", "Caller wants to send_to {:?} to {}", to_send, dest);
-
         let mut to_ret = None;
         // optimization to only store notification stuff on requests (not on replies too)
         if let packets::MessageType::Request(_) = to_send.message_type {
@@ -173,8 +171,8 @@ impl DHTSocket {
             .recv_from(&mut buf)
             .await
             .map_err(|e| RustyDHTError::SocketRecvError(e.into()))?;
+        trace!(target:"rustydht_lib::DHTSocket", "Receiving {} bytes from {}", num_bytes, sender);
         let message = packets::Message::from_bytes(&buf[..num_bytes])?;
-        trace!(target:"rustydht_lib::DHTSocket", "Receiving {:?} from {}", message, sender);
 
         let request_info = {
             request_storage
