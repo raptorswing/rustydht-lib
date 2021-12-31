@@ -82,6 +82,9 @@ impl<T: Bucketable> Buckets<T> {
         None
     }
 
+    /// Get the `k` nearest nodes/items stored in the buckets
+    ///
+    /// The returned vector is sorted by distance, from nearest to farthest.
     pub fn get_nearest_nodes(&self, id: &Id, exclude: Option<&Id>) -> Vec<&T> {
         let mut all: Vec<&T> = self
             .values()
