@@ -174,12 +174,12 @@ impl DHT {
     pub async fn run_event_loop(&self) -> Result<(), RustyDHTError> {
         match tokio::try_join!(
             // One-time
-            self.ping_routers(self.shutdown.clone()),
+            self.ping_routers(),
             // Loop indefinitely
             self.accept_incoming_packets(),
-            self.periodic_router_ping(self.shutdown.clone()),
-            self.periodic_buddy_ping(self.shutdown.clone()),
-            self.periodic_find_node(self.shutdown.clone()),
+            self.periodic_router_ping(),
+            self.periodic_buddy_ping(),
+            self.periodic_find_node(),
             self.periodic_ip4_maintenance(),
             self.periodic_token_rotation(),
             async {
@@ -199,22 +199,6 @@ impl DHT {
                 }
             }
         }
-    }
-
-    pub async fn send_get_peers(
-        &self,
-        info_hash: Id,
-        dest: SocketAddr,
-        dest_id: Option<Id>,
-    ) -> Result<packets::Message, RustyDHTError> {
-        DHT::get_peers_impl(
-            self.state.clone(),
-            self.socket.clone(),
-            info_hash,
-            dest,
-            dest_id,
-        )
-        .await
     }
 
     /// Have our DHT node send a [Message](crate::packets::Message), awaits and returns a response.
@@ -536,9 +520,38 @@ impl DHT {
                 }
             }
 
-            packets::MessageType::Response(response_variant) => match response_variant {
-                _ => { /*Responses should be handled by the sender via notification channel.*/ }
-            },
+            // For responses, handle the generic work of adding the responder to the routing
+            // table and taking their IPv4 "vote". But only if their id is valid for their IP.
+            // Note that DHTSocket guarantees that we'll only see responses to requests that we
+            // actually sent - "spurious" or "extraneous" responses will be dropped in DHTSocket
+            // before reaching this point.
+            packets::MessageType::Response(response_variant) => {
+                // Get the id of the sender - safe to unwrap because all Response variants are guaranteed
+                // to have an Id (only error doesn't)
+                let their_id = msg.get_author_id().expect("response doesn't have Id!?");
+                let id_is_valid = their_id.is_valid_for_ip(&addr.ip());
+                if id_is_valid {
+                    let mut state = self.state.try_lock().unwrap();
+                    DHT::ip4_vote_helper(&mut state, &addr, &msg);
+                    state.buckets.add_or_update(Node::new(their_id, addr), true);
+                }
+
+                match response_variant {
+                    // Special handling for find_node responses
+                    // Add the nodes we got back as "seen" (even though we haven't necessarily seen them directly yet).
+                    // They will be pinged later in an attempt to verify them.
+                    packets::ResponseSpecific::FindNodeResponse(args) => {
+                        let mut state = self.state.try_lock().unwrap();
+                        for node in &args.nodes {
+                            if node.id.is_valid_for_ip(&node.address.ip()) {
+                                state.buckets.add_or_update(node.clone(), false);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
             _ => {
                 warn!(target: "rustydht_lib::DHT",
                     "Received unsupported/unexpected KRPCMessage variant from {:?}: {:?}",
@@ -577,55 +590,7 @@ impl DHT {
         return Ok(());
     }
 
-    async fn get_peers_impl(
-        state: Arc<Mutex<DHTState>>,
-        socket: Arc<DHTSocket>,
-        info_hash: Id,
-        target: SocketAddr,
-        target_id: Option<Id>,
-    ) -> Result<packets::Message, RustyDHTError> {
-        let (our_id, read_only) = {
-            let state = state.try_lock().unwrap();
-            (state.our_id, state.settings.read_only)
-        };
-        let req = MessageBuilder::new_get_peers_request()
-            .sender_id(our_id)
-            .target(info_hash)
-            .read_only(read_only)
-            .build()?;
-        let mut reply_channel = socket
-            .send_to(req, target, target_id)
-            .await?
-            .expect("Didn't receive reply notification channel");
-        match reply_channel.recv().await {
-            Some(reply) => {
-                if let packets::MessageType::Response(
-                    packets::ResponseSpecific::GetPeersResponse(arguments),
-                ) = &reply.message_type
-                {
-                    let is_id_valid = arguments.responder_id.is_valid_for_ip(&target.ip());
-                    if is_id_valid {
-                        let mut state = state.try_lock().unwrap();
-                        DHT::ip4_vote_helper(&mut state, &target, &reply);
-                        state
-                            .buckets
-                            .add_or_update(Node::new(arguments.responder_id, target), true);
-                    }
-                    Ok(reply)
-                } else {
-                    Err(RustyDHTError::GeneralError(anyhow!(
-                        "Invalid response to get_peers"
-                    )))
-                }
-            }
-            None => Err(RustyDHTError::GeneralError(anyhow!("sender hung up!?"))),
-        }
-    }
-
-    async fn periodic_buddy_ping(
-        &self,
-        shutdown: shutdown::ShutdownReceiver,
-    ) -> Result<(), RustyDHTError> {
+    async fn periodic_buddy_ping(&self) -> Result<(), RustyDHTError> {
         loop {
             let ping_check_interval_secs = self
                 .state
@@ -683,13 +648,8 @@ impl DHT {
                                 (Instant::now() - wrapper.last_seen).as_secs()
                             );
                         }
-                        let shutdown_clone = shutdown.clone();
-                        self.ping_internal(
-                            shutdown_clone,
-                            wrapper.node.address,
-                            Some(wrapper.node.id),
-                        )
-                        .await?;
+                        self.ping_internal(wrapper.node.address, Some(wrapper.node.id))
+                            .await?;
                     }
 
                     // Reverify those who haven't been verified recently
@@ -699,24 +659,16 @@ impl DHT {
                                 continue;
                             }
                         }
-                        let shutdown_clone = shutdown.clone();
                         trace!(target: "rustydht_lib::DHT", "Sending ping to reverify {:?}", wrapper.node);
-                        self.ping_internal(
-                            shutdown_clone,
-                            wrapper.node.address,
-                            Some(wrapper.node.id),
-                        )
-                        .await?;
+                        self.ping_internal(wrapper.node.address, Some(wrapper.node.id))
+                            .await?;
                     }
                 }
             }
         }
     }
 
-    async fn periodic_find_node(
-        &self,
-        shutdown: shutdown::ShutdownReceiver,
-    ) -> Result<(), RustyDHTError> {
+    async fn periodic_find_node(&self) -> Result<(), RustyDHTError> {
         loop {
             let find_node_interval_secs = self
                 .state
@@ -731,8 +683,7 @@ impl DHT {
             // If we don't know anybody, force a router ping.
             // This is helpful if we've been asleep for a while and lost all peers
             if count_verified <= 0 {
-                let shutdown_clone = shutdown.clone();
-                self.ping_routers(shutdown_clone).await?;
+                self.ping_routers().await?;
             }
 
             // Package things that need state into this block to avoid issues with MutexGuard kept over .await
@@ -758,7 +709,7 @@ impl DHT {
                 id_near_us
             );
             for node in nearest_nodes {
-                self.find_node_internal(shutdown.clone(), node.address, Some(node.id), id_near_us)
+                self.find_node_internal(node.address, Some(node.id), id_near_us)
                     .await?;
             }
         }
@@ -788,10 +739,7 @@ impl DHT {
         }
     }
 
-    async fn periodic_router_ping(
-        &self,
-        shutdown: shutdown::ShutdownReceiver,
-    ) -> Result<(), RustyDHTError> {
+    async fn periodic_router_ping(&self) -> Result<(), RustyDHTError> {
         loop {
             let router_ping_interval_secs = self
                 .state
@@ -801,8 +749,7 @@ impl DHT {
                 .router_ping_interval_secs;
             sleep(Duration::from_secs(router_ping_interval_secs)).await;
             debug!(target: "rustydht_lib::DHT", "Pinging routers");
-            let shutdown_clone = shutdown.clone();
-            self.ping_routers(shutdown_clone).await?;
+            self.ping_routers().await?;
         }
     }
 
@@ -813,82 +760,26 @@ impl DHT {
         }
     }
 
-    /// Helper function for internal use. Spawns a new task and does a ping from there, with timeout.
+    /// Build and send a ping to a target. Doesn't wait for a response
     async fn ping_internal(
         &self,
-        shutdown: shutdown::ShutdownReceiver,
         target: SocketAddr,
         target_id: Option<Id>,
     ) -> Result<(), RustyDHTError> {
-        let state = self.state.clone();
-        let socket = self.socket.clone();
-        shutdown::ShutdownReceiver::spawn_with_shutdown(
-            shutdown,
-            DHT::ping_impl(state, socket, target, target_id),
-            format!("ping to {}", target),
-            Some(Duration::from_secs(5)),
-        );
+        let req = {
+            let state = self.state.try_lock().unwrap();
+            MessageBuilder::new_ping_request()
+                .sender_id(state.our_id)
+                .read_only(state.settings.read_only)
+                .build()
+                .expect("Failed to build ping packet")
+        };
+
+        self.socket.send_to(req, target, target_id).await?;
         Ok(())
     }
 
-    async fn ping_impl(
-        state: Arc<Mutex<DHTState>>,
-        socket: Arc<DHTSocket>,
-        target: SocketAddr,
-        target_id: Option<Id>,
-    ) -> Result<packets::Message, RustyDHTError> {
-        let (our_id, read_only) = {
-            let state = state.try_lock().unwrap();
-            (state.our_id, state.settings.read_only)
-        };
-        let req = MessageBuilder::new_ping_request()
-            .sender_id(our_id)
-            .read_only(read_only)
-            .build()?;
-        let mut reply_channel = socket
-            .send_to(req, target, target_id)
-            .await?
-            .expect("Didn't receive reply notification channel");
-
-        match reply_channel.recv().await {
-            Some(reply) => {
-                match &reply.message_type {
-                    packets::MessageType::Response(response_variant) => {
-                        match response_variant {
-                            packets::ResponseSpecific::PingResponse(arguments) => {
-                                let is_id_valid =
-                                    arguments.responder_id.is_valid_for_ip(&target.ip());
-                                if !is_id_valid {
-                                    return Ok(reply);
-                                }
-
-                                let mut state = state.try_lock().unwrap();
-                                // If so, we'll take their vote on our IPv4 address and mark them as verified
-                                DHT::ip4_vote_helper(&mut state, &target, &reply);
-                                state
-                                    .buckets
-                                    .add_or_update(Node::new(arguments.responder_id, target), true);
-                                Ok(reply)
-                            }
-                            _ => Err(RustyDHTError::GeneralError(anyhow!(
-                                "Invalid response to ping"
-                            ))),
-                        }
-                    }
-                    _ => Err(RustyDHTError::GeneralError(anyhow!(
-                        "Invalid response to ping"
-                    ))),
-                }
-            }
-            None => Err(RustyDHTError::GeneralError(anyhow!("sender hung up!?"))),
-        }
-    }
-
-    async fn ping_router<G: AsRef<str>>(
-        &self,
-        shutdown: shutdown::ShutdownReceiver,
-        hostname: G,
-    ) -> Result<(), RustyDHTError> {
+    async fn ping_router<G: AsRef<str>>(&self, hostname: G) -> Result<(), RustyDHTError> {
         let hostname = hostname.as_ref();
         // Resolve and add to request storage
         let resolve = lookup_host(hostname).await;
@@ -906,9 +797,7 @@ impl DHT {
 
         for socket_addr in resolve.unwrap() {
             if socket_addr.is_ipv4() {
-                let shutdown_clone = shutdown.clone();
-                self.ping_internal(shutdown_clone, socket_addr, None)
-                    .await?;
+                self.ping_internal(socket_addr, None).await?;
                 break;
             }
         }
@@ -916,15 +805,11 @@ impl DHT {
     }
 
     /// Pings some bittorrent routers
-    async fn ping_routers(
-        &self,
-        shutdown: shutdown::ShutdownReceiver,
-    ) -> Result<(), RustyDHTError> {
+    async fn ping_routers(&self) -> Result<(), RustyDHTError> {
         let mut futures = futures::stream::FuturesUnordered::new();
         let routers = self.state.try_lock().unwrap().routers.clone();
         for hostname in routers {
-            let shutdown_clone = shutdown.clone();
-            futures.push(self.ping_router(shutdown_clone, hostname));
+            futures.push(self.ping_router(hostname));
         }
         while let Some(result) = futures.next().await {
             result?;
@@ -948,71 +833,22 @@ impl DHT {
 
     async fn find_node_internal(
         &self,
-        shutdown: shutdown::ShutdownReceiver,
         dest: SocketAddr,
         dest_id: Option<Id>,
         target: Id,
     ) -> Result<(), RustyDHTError> {
-        let state = self.state.clone();
-        let socket = self.socket.clone();
-        shutdown::ShutdownReceiver::spawn_with_shutdown(
-            shutdown,
-            DHT::find_node_impl(state, socket, dest, dest_id, target),
-            format!("find_node to {} for {}", dest, target),
-            Some(Duration::from_secs(5)),
-        );
-        Ok(())
-    }
-
-    async fn find_node_impl(
-        state: Arc<Mutex<DHTState>>,
-        socket: Arc<DHTSocket>,
-        dest: SocketAddr,
-        dest_id: Option<Id>,
-        target: Id,
-    ) -> Result<packets::Message, RustyDHTError> {
-        let (our_id, read_only) = {
-            let state = state.try_lock().unwrap();
-            (state.our_id, state.settings.read_only)
+        let req = {
+            let state = self.state.try_lock().unwrap();
+            MessageBuilder::new_find_node_request()
+                .sender_id(state.our_id)
+                .read_only(state.settings.read_only)
+                .target(target)
+                .build()
+                .expect("Failed to build ping packet")
         };
-        let req = MessageBuilder::new_find_node_request()
-            .sender_id(our_id)
-            .target(target)
-            .read_only(read_only)
-            .build()?;
-        let mut reply_channel = socket
-            .send_to(req, dest, dest_id)
-            .await?
-            .expect("Didn't receive reply notification channel");
 
-        match reply_channel.recv().await {
-            Some(reply) => {
-                if let packets::MessageType::Response(
-                    packets::ResponseSpecific::FindNodeResponse(arguments),
-                ) = &reply.message_type
-                {
-                    let mut state = state.try_lock().unwrap();
-                    DHT::ip4_vote_helper(&mut state, &dest, &reply);
-                    state
-                        .buckets
-                        .add_or_update(Node::new(arguments.responder_id, dest), true);
-
-                    // Add the nodes we got back as "seen" (even though we haven't necessarily seen them directly yet).
-                    // They will be pinged later in an attempt to verify them.
-                    for node in &arguments.nodes {
-                        if node.id.is_valid_for_ip(&node.address.ip()) {
-                            state.buckets.add_or_update(node.clone(), false);
-                        }
-                    }
-                    Ok(reply)
-                } else {
-                    Err(RustyDHTError::GeneralError(anyhow!(
-                        "Invalid response to find_node"
-                    )))
-                }
-            }
-            None => Err(RustyDHTError::GeneralError(anyhow!("sender hung up!?"))),
-        }
+        self.socket.send_to(req, dest, dest_id).await?;
+        Ok(())
     }
 
     /// Adds a 'vote' for whatever IP address the sender says we have.
