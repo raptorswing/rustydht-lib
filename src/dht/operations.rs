@@ -1,16 +1,68 @@
 use crate::common::{Id, Node};
 use crate::dht::DHT;
+use crate::errors::RustyDHTError;
 use crate::packets;
 use crate::packets::MessageBuilder;
 use crate::storage::buckets::Buckets;
 use crate::storage::node_wrapper::NodeWrapper;
+use anyhow::anyhow;
 use futures::StreamExt;
 use log::{debug, error, info, trace, warn};
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-/// Use the DHT to find the closes nodes to the target as possible.
+/// Announce that you are a peer for a specific info_hash, returning the nodes
+/// that were successfully announced to.
+///
+/// # Arguments
+/// * `dht` - DHT instance that will be used to communicate
+/// * `info_hash` - Id of the torrent
+/// * `port` - optional port that other peers should use to contact your peer.
+/// If omitted, `implied_port` will be set true on the announce messages and
+/// * `timeout` - the maximum amount of time that will be spent searching for
+/// peers close to `info_hash` before announcing to them. This means that this
+/// function can actually take a bit longer than `timeout`, since it will take
+/// a moment after `timeout` has elapsed to announce to the nodes.
+pub async fn announce_peer(
+    dht: &DHT,
+    info_hash: Id,
+    port: Option<u16>,
+    timeout: Duration,
+) -> Vec<Node> {
+    let mut to_ret = Vec::new();
+
+    // Figure out which nodes we want to announce to
+    let nodes = find_node(dht, info_hash, timeout).await;
+
+    // Prepare to send packets to all of them
+    let mut todos = futures::stream::FuturesUnordered::new();
+    for node in nodes {
+        todos.push(async move {
+            match get_peers_then_announce(dht, info_hash, port, node.address, Some(node.id), Some(Duration::from_secs(5))).await {
+                Ok(_) => Some(node),
+                Err(e) => {
+                    debug!(target: "rustydht_lib::operations::announce_peer", "Failed to announce to {:?}. Error: {}", node, e);
+                    None
+                }
+            }
+        });
+    }
+
+    // Execute the futures, handle their results
+    while let Some(announce_result) = todos.next().await {
+        match announce_result {
+            Some(node) => {
+                to_ret.push(node);
+            }
+            _ => {}
+        }
+    }
+
+    to_ret
+}
+
+/// Use the DHT to find the closest nodes to the target as possible.
 ///
 /// This runs until it stops making progress or `timeout` has elapsed.
 pub async fn find_node(dht: &DHT, target: Id, timeout: Duration) -> Vec<Node> {
@@ -201,4 +253,53 @@ pub async fn get_peers(
     }
 
     to_ret.into_iter().collect()
+}
+
+async fn get_peers_then_announce(
+    dht: &DHT,
+    info_hash: Id,
+    port: Option<u16>,
+    dest: SocketAddr,
+    dest_id: Option<Id>,
+    timeout: Option<Duration>,
+) -> Result<(), RustyDHTError> {
+    let dht_settings = dht.get_settings();
+    let our_id = dht.get_id();
+    let get_peers_req = MessageBuilder::new_get_peers_request()
+        .sender_id(our_id)
+        .read_only(dht_settings.read_only)
+        .target(info_hash)
+        .build()?;
+
+    let get_peers_reply = dht
+        .send_request(get_peers_req, dest, dest_id, timeout)
+        .await?;
+
+    match get_peers_reply.message_type {
+        packets::MessageType::Response(packets::ResponseSpecific::GetPeersResponse(args)) => {
+            let announce_peers_req = MessageBuilder::new_announce_peer_request()
+                .sender_id(our_id)
+                .read_only(dht_settings.read_only)
+                .target(info_hash)
+                .token(args.token)
+                .port(match port {
+                    Some(p) => p,
+                    None => 0,
+                })
+                .implied_port(match port {
+                    Some(_) => false,
+                    None => true,
+                })
+                .build()?;
+
+            dht.send_request(announce_peers_req, dest, dest_id, timeout)
+                .await?;
+
+            // If we don't get an error from the announce_peer send_request, then we got a good response
+            Ok(())
+        }
+        _ => Err(RustyDHTError::GeneralError(anyhow!(
+            "Received wrong response to get_peers"
+        ))),
+    }
 }

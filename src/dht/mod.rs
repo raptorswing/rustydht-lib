@@ -10,4 +10,5 @@ pub mod dht_event;
 
 mod socket;
 
+/// Functions that use [DHT](crate::dht::DHT) to perform high-level operations on the network.
 pub mod operations;
