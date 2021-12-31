@@ -201,25 +201,58 @@ impl DHT {
         }
     }
 
-    /// Have our DHT node send a [Message](crate::packets::Message), awaits and returns a response.
+    /// Sends a [Message](crate::packets::Message), awaits and returns a response.
     ///
-    /// Note that this doesn't implement any timeout behavior - it will await responses
-    /// indefinitely. If you need timeouts you must wrap this in a tokio Timeout or
-    /// similar.
+    /// Note that `req` must be a request message (not a response or error message),
+    /// as this method awaits a reply. DHT automatically handles sending responses for
+    /// incoming requests.
+    ///
+    /// # Arguments
+    /// * `req` - the message that should be sent
+    /// * `dest` - the IP/port of the intended recipient
+    /// * `dest_id` - the Id of the DHT node listening at `dest`, if known. Otherwise, `None` can be provided.
+    /// * `timeout` - An optional timeout. If supplied, this function will return
+    /// a [RustyDHTError::TimeoutError](crate::errors::RustyDHTError::TimeoutError) if `dest` does not reply
+    /// to the message within the allotted time.
     pub async fn send_request(
         &self,
         req: packets::Message,
         dest: SocketAddr,
         dest_id: Option<Id>,
+        timeout: Option<Duration>,
     ) -> Result<packets::Message, RustyDHTError> {
-        DHT::common_send_and_handle_response(
-            self.state.clone(),
-            self.socket.clone(),
-            req,
-            dest,
-            dest_id,
-        )
-        .await
+        match timeout {
+            Some(timeout) => match tokio::time::timeout(
+                timeout,
+                DHT::common_send_and_handle_response(
+                    self.state.clone(),
+                    self.socket.clone(),
+                    req.clone(),
+                    dest,
+                    dest_id,
+                ),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(RustyDHTError::TimeoutError(anyhow!(
+                    "Timed out after {:?} waiting for {} to respond to {:?}",
+                    timeout,
+                    dest,
+                    req
+                ))),
+            },
+            None => {
+                DHT::common_send_and_handle_response(
+                    self.state.clone(),
+                    self.socket.clone(),
+                    req.clone(),
+                    dest,
+                    dest_id,
+                )
+                .await
+            }
+        }
     }
 
     /// Subscribe to DHTEvent notifications from the DHT.
@@ -803,6 +836,12 @@ impl DHT {
         target: SocketAddr,
         target_id: Option<Id>,
     ) -> Result<packets::Message, RustyDHTError> {
+        if !matches!(msg.message_type, packets::MessageType::Request(_)) {
+            return Err(RustyDHTError::GeneralError(anyhow!(
+                "This method is only for sending requests"
+            )));
+        }
+
         let maybe_receiver = socket.send_to(msg.clone(), target, target_id).await?;
         match maybe_receiver {
             Some(mut receiver) => match receiver.recv().await {

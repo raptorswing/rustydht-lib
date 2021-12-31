@@ -44,55 +44,47 @@ pub async fn get_peers(
                 .sender_id(dht.get_id());
             let mut todos = futures::stream::FuturesUnordered::new();
             for node in nearest {
-                let fut = tokio::time::timeout(
-                    Duration::from_secs(5),
-                    dht.send_request(
-                        request_builder
-                            .clone()
-                            .build()
-                            .expect("Failed to build get_peers request"),
-                        node.node.address,
-                        Some(node.node.id),
-                    ),
-                );
-                todos.push(fut);
+                todos.push(dht.send_request(
+                    request_builder
+                        .clone()
+                        .build()
+                        .expect("Failed to build get_peers request"),
+                    node.node.address,
+                    Some(node.node.id),
+                    Some(Duration::from_secs(5))
+                ));
             }
 
             // Send get_peers to nearest nodes, handle their responses
             let started_sending_time = Instant::now();
-            while let Some(timeout_result) = todos.next().await {
-                match timeout_result {
-                    Ok(request_result) => match request_result {
-                        Ok(message) => match message.message_type {
-                            packets::MessageType::Response(
-                                packets::ResponseSpecific::GetPeersResponse(args),
-                            ) => match args.values {
-                                packets::GetPeersResponseValues::Nodes(n) => {
-                                    debug!(target: "rustydht_lib::operations::get_peers", "Got {} nodes", n.len());
-                                    for node in n {
-                                        if let None = buckets.get_mut(&node.id) {
-                                            trace!(target: "rustydht_lib::operations::get_peers", "Adding node {:?} to buckets", node);
-                                            buckets.add(NodeWrapper::new(node), None);
-                                        }
+            while let Some(request_result) = todos.next().await {
+                match request_result {
+                    Ok(message) => match message.message_type {
+                        packets::MessageType::Response(
+                            packets::ResponseSpecific::GetPeersResponse(args),
+                        ) => match args.values {
+                            packets::GetPeersResponseValues::Nodes(n) => {
+                                debug!(target: "rustydht_lib::operations::get_peers", "Got {} nodes", n.len());
+                                for node in n {
+                                    if let None = buckets.get_mut(&node.id) {
+                                        trace!(target: "rustydht_lib::operations::get_peers", "Adding node {:?} to buckets", node);
+                                        buckets.add(NodeWrapper::new(node), None);
                                     }
                                 }
-                                packets::GetPeersResponseValues::Peers(p) => {
-                                    info!(target: "rustydht_lib::operations::get_peers", "Got {} peers", p.len());
-                                    for peer in p {
-                                        to_ret.insert(peer);
-                                    }
+                            }
+                            packets::GetPeersResponseValues::Peers(p) => {
+                                info!(target: "rustydht_lib::operations::get_peers", "Got {} peers", p.len());
+                                for peer in p {
+                                    to_ret.insert(peer);
                                 }
-                            },
-                            _ => {
-                                error!(target: "rustydht_lib::operations::get_peers", "Got wrong packet type back: {:?}", message);
                             }
                         },
-                        Err(e) => {
-                            warn!(target: "rustydht_lib::operations::get_peers", "Error sending get_peers request: {}", e);
+                        _ => {
+                            error!(target: "rustydht_lib::operations::get_peers", "Got wrong packet type back: {:?}", message);
                         }
                     },
                     Err(e) => {
-                        debug!(target: "rustydht_lib::operations::get_peers", "get_peers request timed out: {}", e);
+                        warn!(target: "rustydht_lib::operations::get_peers", "Error sending get_peers request: {}", e);
                     }
                 }
             }
