@@ -8,6 +8,7 @@ use rustydht_lib::shutdown;
 use rustydht_lib::storage::node_bucket_storage::{NodeBucketStorage, NodeStorage};
 use simple_logger::SimpleLogger;
 use std::sync::Arc;
+use std::time::Duration;
 
 const ROUTERS: [&str; 3] = [
     "router.bittorrent.com:6881",
@@ -30,13 +31,27 @@ async fn main() {
         .arg(
             Arg::with_name("dht_listen_port")
                 .short("l")
-                .default_value("6881"),
+                .default_value("6881")
+                .help("The UDP port that the DHT will bind to"),
         )
         .arg(
             Arg::with_name("info_hash")
                 .short("i")
                 .required(true)
-                .takes_value(true),
+                .takes_value(true)
+                .help("The info hash for which we should find peers"),
+        )
+        .arg(
+            Arg::with_name("timeout")
+                .short("t")
+                .default_value("60")
+                .help("Stop searching after this many seconds have elapsed"),
+        )
+        .arg(
+            Arg::with_name("desired_peers")
+                .short("d")
+                .default_value("1")
+                .help("Stop searching after this number of peers have been found"),
         )
         .get_matches();
 
@@ -52,6 +67,20 @@ async fn main() {
             .expect("No value specified for info_hash"),
     )
     .expect("Failed to parse info_hash");
+
+    let timeout = Duration::from_secs(
+        cmdline_matches
+            .value_of("timeout")
+            .expect("No value for timeout")
+            .parse()
+            .expect("Invalid timeout"),
+    );
+
+    let desired_peers = cmdline_matches
+        .value_of("desired_peers")
+        .expect("No value for desired_peers")
+        .parse()
+        .expect("Invalid desired_peers");
 
     let (mut shutdown_tx, shutdown_rx) = shutdown::create_shutdown();
     let ip_source = Box::new(IPV4Consensus::new(2, 10));
@@ -83,7 +112,7 @@ async fn main() {
             shutdown_tx.shutdown().await;
         },
         _ = async move {
-            let peers = operations::get_peers(&dht_clone, info_hash, 1).await;
+            let peers = operations::get_peers(&dht_clone, info_hash, desired_peers, timeout).await;
             println!("Peers:\n{:?}", peers);
         } => {}
     }
