@@ -47,12 +47,6 @@ async fn main() {
                 .default_value("60")
                 .help("Stop searching after this many seconds have elapsed"),
         )
-        .arg(
-            Arg::with_name("desired_peers")
-                .short("d")
-                .default_value("1")
-                .help("Stop searching after this number of peers have been found"),
-        )
         .get_matches();
 
     let port: u16 = cmdline_matches
@@ -75,12 +69,6 @@ async fn main() {
             .parse()
             .expect("Invalid timeout"),
     );
-
-    let desired_peers = cmdline_matches
-        .value_of("desired_peers")
-        .expect("No value for desired_peers")
-        .parse()
-        .expect("Invalid desired_peers");
 
     let (mut shutdown_tx, shutdown_rx) = shutdown::create_shutdown();
     let ip_source = Box::new(IPV4Consensus::new(2, 10));
@@ -112,8 +100,8 @@ async fn main() {
             shutdown_tx.shutdown().await;
         },
         _ = async move {
-            let peers = operations::get_peers(&dht_clone, info_hash, desired_peers, timeout).await;
-            println!("Peers:\n{:?}", peers);
+            let result = operations::get_peers(&dht_clone, info_hash, timeout).await;
+            println!("Peers:\n{:?}", result.peers);
         } => {}
     }
 }
