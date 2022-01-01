@@ -100,8 +100,8 @@ async fn main() {
             shutdown_tx.shutdown().await;
         },
         _ = async move {
-            let result = operations::get_peers(&dht_clone, info_hash, timeout).await;
-            println!("Peers:\n{:?}", result.peers);
+            let result = operations::get_peers(&dht_clone, info_hash, timeout).await.expect("get_peers hit an error");
+            println!("Peers:\n{:?}", result.peers());
         } => {}
     }
 }

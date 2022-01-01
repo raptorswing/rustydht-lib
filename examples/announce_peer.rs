@@ -115,7 +115,7 @@ async fn main() {
             shutdown_tx.shutdown().await;
         },
         _ = async move {
-            let nodes = operations::announce_peer(&dht_clone, info_hash, announce_port, timeout).await;
+            let nodes = operations::announce_peer(&dht_clone, info_hash, announce_port, timeout).await.expect("announce_peer hit an error");
             println!("Announced to:\n{:?}", nodes);
         } => {}
     }

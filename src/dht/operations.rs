@@ -28,11 +28,11 @@ pub async fn announce_peer(
     info_hash: Id,
     port: Option<u16>,
     timeout: Duration,
-) -> Vec<Node> {
+) -> Result<Vec<Node>, RustyDHTError> {
     let mut to_ret = Vec::new();
 
     // Figure out which nodes we want to announce to
-    let get_peers_result = get_peers(dht, info_hash, timeout).await;
+    let get_peers_result = get_peers(dht, info_hash, timeout).await?;
 
     trace!(target:"rustydht_lib::operations::announce_peer", "{} nodes responded to get_peers", get_peers_result.responders.len());
 
@@ -51,7 +51,7 @@ pub async fn announce_peer(
 
     // Prepare to send packets to the nearest 8
     let mut todos = futures::stream::FuturesUnordered::new();
-    for responder in get_peers_result.responders.into_iter().take(8) {
+    for responder in get_peers_result.responders().into_iter().take(8) {
         let builder = announce_builder.clone();
         todos.push(async move {
             let announce_req = builder
@@ -92,13 +92,17 @@ pub async fn announce_peer(
         }
     }
 
-    to_ret
+    Ok(to_ret)
 }
 
 /// Use the DHT to find the closest nodes to the target as possible.
 ///
 /// This runs until it stops making progress or `timeout` has elapsed.
-pub async fn find_node(dht: &DHT, target: Id, timeout: Duration) -> Vec<Node> {
+pub async fn find_node(
+    dht: &DHT,
+    target: Id,
+    timeout: Duration,
+) -> Result<Vec<Node>, RustyDHTError> {
     let mut buckets = Buckets::new(target, 8);
     let dht_settings = dht.get_settings();
 
@@ -185,25 +189,29 @@ pub async fn find_node(dht: &DHT, target: Id, timeout: Duration) -> Vec<Node> {
         debug!(target: "rustydht_lib::operations::find_node", "Timed out after {:?}", timeout);
     }
 
-    buckets
+    Ok(buckets
         .get_nearest_nodes(&target, None)
         .into_iter()
         .map(|nw| nw.node.clone())
-        .collect()
+        .collect())
 }
 
 /// Use the DHT to retrieve peers for the given info_hash.
 ///
 /// Returns the all the results so far after at least `desired_peers`
 /// peers have been found, or `timeout` has elapsed (whichever happens first)
-pub async fn get_peers(dht: &DHT, info_hash: Id, timeout: Duration) -> GetPeersResult {
+pub async fn get_peers(
+    dht: &DHT,
+    info_hash: Id,
+    timeout: Duration,
+) -> Result<GetPeersResult, RustyDHTError> {
     let mut unique_peers = HashSet::new();
     let mut responders = Vec::new();
     let mut buckets = Buckets::new(info_hash, 8);
     let dht_settings = dht.get_settings();
 
     // Hack to aid in bootstrapping
-    find_node(dht, info_hash, Duration::from_secs(5)).await;
+    find_node(dht, info_hash, Duration::from_secs(5)).await?;
 
     if let Err(_) = tokio::time::timeout(timeout,
     async {
@@ -307,13 +315,18 @@ pub async fn get_peers(dht: &DHT, info_hash: Id, timeout: Duration) -> GetPeersR
         debug!(target: "rustydht_lib::operations::get_peers", "Timed out after {:?}, returning current results", timeout);
     }
 
-    GetPeersResult::new(info_hash, unique_peers.into_iter().collect(), responders)
+    Ok(GetPeersResult::new(
+        info_hash,
+        unique_peers.into_iter().collect(),
+        responders,
+    ))
 }
 
+/// Represents the results of a [get_peers](crate::dht::operations::get_peers) operation
 pub struct GetPeersResult {
-    pub info_hash: Id,
-    pub peers: Vec<SocketAddr>,
-    pub responders: Vec<GetPeersResponder>,
+    info_hash: Id,
+    peers: Vec<SocketAddr>,
+    responders: Vec<GetPeersResponder>,
 }
 
 impl GetPeersResult {
@@ -333,9 +346,46 @@ impl GetPeersResult {
             responders: responders,
         }
     }
+
+    /// The info_hash of the torrent that get_peers was attempting to get peers for
+    pub fn info_hash(self) -> Id {
+        self.info_hash
+    }
+
+    /// Vector full of any peers that were found for the info_hash
+    pub fn peers(self) -> Vec<SocketAddr> {
+        self.peers
+    }
+
+    /// Vector of information about the DHT nodes that responded to get_peers
+    ///
+    /// This is sorted by distance of the Node to the info_hash, from nearest to farthest.
+    pub fn responders(self) -> Vec<GetPeersResponder> {
+        self.responders
+    }
 }
 
+/// Represents the response of a node to a get_peers request, including its Id, IP address,
+/// and the token it replied with. This is helpful in case we want to follow up with
+/// an announce_peer request.
 pub struct GetPeersResponder {
-    pub node: Node,
-    pub token: Vec<u8>,
+    node: Node,
+    token: Vec<u8>,
+}
+
+impl GetPeersResponder {
+    pub fn new(node: Node, token: Vec<u8>) -> GetPeersResponder {
+        GetPeersResponder {
+            node: node,
+            token: token,
+        }
+    }
+
+    pub fn node(self) -> Node {
+        self.node
+    }
+
+    pub fn token(self) -> Vec<u8> {
+        self.token
+    }
 }

@@ -2,7 +2,6 @@ use super::internal;
 use crate::common::{Id, Node, ID_SIZE};
 use crate::errors;
 use anyhow::anyhow;
-use log::warn;
 use std::convert::TryInto;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -584,13 +583,6 @@ pub fn response_matches_request(res: &ResponseSpecific, req: &RequestSpecific) -
             if let RequestSpecific::SampleInfoHashesRequest { .. } = req {
                 return true;
             }
-        }
-
-        _ => {
-            warn!(target: "rustydht_lib::response_matches_request",
-                "Unimplemented response type {:?}",
-                res
-            );
         }
     }
     return false;

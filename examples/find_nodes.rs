@@ -100,7 +100,7 @@ async fn main() {
             shutdown_tx.shutdown().await;
         },
         _ = async move {
-            let nodes = operations::find_node(&dht_clone, info_hash, timeout).await;
+            let nodes = operations::find_node(&dht_clone, info_hash, timeout).await.expect("find_node hit an error");
             println!("Nodes:\n{:?}", nodes);
         } => {}
     }
