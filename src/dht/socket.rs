@@ -154,6 +154,8 @@ impl DHTSocket {
                         warn!(target: "rustydht_lib::DHTSocket", "Failed to parse incoming packet: {:?}", e);
                         continue;
                     }
+
+                    RustyDHTError::SocketRecvError(e) if DHTSocket::should_ignore_error(&e) => {}
                     _ => {
                         error!(target: "rustydht_lib::DHTSocket", "Error in background incoming I/O task:{:?}", e);
                         break;
@@ -211,5 +213,74 @@ impl DHTSocket {
                 .unwrap()
                 .prune_older_than(Duration::from_secs(10));
         }
+    }
+
+    #[cfg(windows)]
+    fn should_ignore_error(e: &std::io::Error) -> bool {
+        match e.raw_os_error() {
+            Some(e) => {
+                match e {
+                    // On windows, recv_from fails with this code if the datagram is too big for the buffer.
+                    // We would rather just ignore those datagrams
+                    10040 => true,
+                    _ => false,
+                }
+            }
+            None => false,
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn should_ignore_error(_: &std::io::Error) -> bool {
+        false
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::packets::MessageBuilder;
+    use crate::shutdown;
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::time::Duration;
+    use tokio::net::UdpSocket;
+
+    #[tokio::test]
+    async fn test_dhtsocket_ignores_oversized_datagrams() -> Result<(), RustyDHTError> {
+        let (mut shutdown_tx, shutdown_rx) = shutdown::create_shutdown();
+        let socket_address: SocketAddr = "0.0.0.0:0".parse().unwrap();
+        let socket = UdpSocket::bind(socket_address).await.unwrap();
+        let port = socket.local_addr().unwrap().port();
+        let socket = DHTSocket::new(shutdown_rx.clone(), socket);
+
+        ShutdownReceiver::spawn_with_shutdown(
+            shutdown_rx,
+            async move {
+                let server_sockaddr =
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
+                let socket_address: SocketAddr = "0.0.0.0:0".parse().unwrap();
+                let client = UdpSocket::bind(socket_address).await.unwrap();
+
+                let payload = [0; 8192];
+                client.send_to(&payload, server_sockaddr).await.unwrap();
+
+                let ping_req = MessageBuilder::new_ping_request()
+                    .sender_id(Id::from_hex("0000000000000000000000000000000000000000").unwrap())
+                    .build()
+                    .unwrap();
+                client
+                    .send_to(&ping_req.to_bytes().unwrap(), server_sockaddr)
+                    .await
+                    .unwrap();
+            },
+            "Sender",
+            None,
+        );
+
+        tokio::time::timeout(Duration::from_secs(1), socket.recv_from())
+            .await
+            .unwrap()?;
+        shutdown_tx.shutdown().await;
+        Ok(())
     }
 }
