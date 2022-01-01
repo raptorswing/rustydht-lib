@@ -561,6 +561,11 @@ pub fn response_matches_request(res: &ResponseSpecific, req: &RequestSpecific) -
             if let RequestSpecific::PingRequest { .. } = req {
                 return true;
             }
+
+            // Ping responses are indistinguishable from announce_peer responses
+            if let RequestSpecific::AnnouncePeerRequest { .. } = req {
+                return true;
+            }
         }
 
         ResponseSpecific::FindNodeResponse { .. } => {
@@ -571,6 +576,12 @@ pub fn response_matches_request(res: &ResponseSpecific, req: &RequestSpecific) -
 
         ResponseSpecific::GetPeersResponse { .. } => {
             if let RequestSpecific::GetPeersRequest { .. } = req {
+                return true;
+            }
+        }
+
+        ResponseSpecific::SampleInfoHashesResponse { .. } => {
+            if let RequestSpecific::SampleInfoHashesRequest { .. } = req {
                 return true;
             }
         }
