@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 * Fix a Windows-only bug that can cause DHTSocket to error if someone sends it a datagram larger than the receive buffer.
+* Fix a bug causing Message parsing to fail on get_peers responses with no nodes or peers
 
 ## [v2.0.0] - 2021-12-30
 * Add MessageBuilder, a fluent interface for building Message structs. Remove the old create_ methods for creating Messages. This change makes breaking changes to the public API, and is the reason for the major version bump.
