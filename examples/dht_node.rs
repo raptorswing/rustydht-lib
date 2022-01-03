@@ -7,6 +7,7 @@ use rustydht_lib::common::ipv4_addr_src::IPV4Consensus;
 use rustydht_lib::dht;
 use rustydht_lib::storage::node_bucket_storage::{NodeBucketStorage, NodeStorage};
 use simple_logger::SimpleLogger;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use warp::Filter;
 
@@ -30,14 +31,14 @@ async fn main() {
         .about("Example application for rustydht-lib. Acts as a Node on the mainline BitTorrent DHT network, runs a small HTTP status page.")
         .arg(
             Arg::with_name("listen_port")
-                .short("l")
-                .default_value("6881")
-                .help("UDP port that the DHT should use to communicate with the network"))
+            .short("l")
+            .default_value("6881")
+            .help("UDP port that the DHT should use to communicate with the network"))
         .arg(
-            Arg::with_name("http_port")
+            Arg::with_name("http")
                 .short("h")
-                .default_value("8080")
-                .help("TCP port that the HTTP status server should listen on"))
+                .default_value("127.0.0.1:8080")
+                .help("Socket address that the HTTP status server will listen on for TCP connections"))
         .arg(
             Arg::with_name("initial_id")
                 .short("i")
@@ -51,11 +52,11 @@ async fn main() {
         .expect("No value specified for listen port")
         .parse()
         .expect("Invalid value for listen port");
-    let http_port: u16 = matches
-        .value_of("http_port")
-        .expect("No value specified for HTTP port")
+    let http_sockaddr: SocketAddr = matches
+        .value_of("http")
+        .expect("No value specified for 'http'")
         .parse()
-        .expect("Invalid value for http port");
+        .expect("Invalid value for 'http'");
 
     let initial_id = match matches.value_of("initial_id") {
         None => None,
@@ -111,12 +112,10 @@ async fn main() {
         };
 
         let mut shutdown_rx = shutdown_rx.clone();
-        let (_addr, server) = warp::serve(handler).bind_with_graceful_shutdown(
-            ([127, 0, 0, 1], http_port),
-            async move {
+        let (_addr, server) =
+            warp::serve(handler).bind_with_graceful_shutdown(http_sockaddr, async move {
                 shutdown_rx.watch().await;
-            },
-        );
+            });
 
         server
     };
