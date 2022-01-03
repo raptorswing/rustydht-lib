@@ -198,8 +198,8 @@ pub async fn find_node(
 
 /// Use the DHT to retrieve peers for the given info_hash.
 ///
-/// Returns the all the results so far after at least `desired_peers`
-/// peers have been found, or `timeout` has elapsed (whichever happens first)
+/// Returns the all the results so far after `timeout` has elapsed
+/// or the operation stops making progress (whichever happens first).
 pub async fn get_peers(
     dht: &DHT,
     info_hash: Id,
