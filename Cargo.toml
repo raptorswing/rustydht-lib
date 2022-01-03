@@ -30,6 +30,6 @@ tokio = { version = "1", features = ["rt","net", "time", "macros", "sync"] }
 [dev-dependencies]
 clap = "^2"
 rand_chacha = "0.3.0"
-simple_logger = "^1"
+simple_logger = { version = "^1", default-features = false, features = ["colors"] }
 tokio = { version = "1", features = ["rt","net", "time", "macros", "sync", "signal"] }
 warp = "0.3"
