@@ -422,10 +422,12 @@ impl Message {
                                     GetPeersResponseValues::Peers(bytes_to_peers(
                                         &arguments.values.as_ref().unwrap(),
                                     )?)
-                                } else {
+                                } else if arguments.nodes.is_some() {
                                     GetPeersResponseValues::Nodes(bytes_to_nodes4(
                                         &arguments.nodes.as_ref().unwrap(),
                                     )?)
+                                } else {
+                                    GetPeersResponseValues::Nodes(vec![])
                                 },
                             })
                         }
@@ -805,6 +807,35 @@ mod tests {
         let parsed_serde_msg = internal::DHTMessage::from_bytes(bytes).unwrap();
         let parsed_msg = Message::from_serde_message(parsed_serde_msg).unwrap();
         assert_eq!(parsed_msg, original_msg);
+    }
+
+    #[test]
+    fn test_get_peers_response_neither() {
+        let serde_message = internal::DHTMessage {
+            ip: None,
+            read_only: None,
+            transaction_id: vec![1, 2, 3],
+            version: None,
+            variant: internal::DHTMessageVariant::DHTResponse(
+                internal::DHTResponseSpecific::DHTGetPeersResponse {
+                    arguments: internal::DHTGetPeersResponseArguments {
+                        id: Id::from_hex("0505050505050505050505050505050505050505")
+                            .unwrap()
+                            .to_vec(),
+                        token: vec![0, 1],
+                        nodes: None,
+                        values: None,
+                    },
+                },
+            ),
+        };
+        let parsed_msg = Message::from_serde_message(serde_message).unwrap();
+        assert!(matches!(
+            parsed_msg.message_type,
+            MessageType::Response(ResponseSpecific::GetPeersResponse(
+                GetPeersResponseArguments { .. }
+            ))
+        ));
     }
 
     #[test]
