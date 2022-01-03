@@ -3,6 +3,7 @@
 ## [Unreleased] - 2022-01-02
 * Remove `timestamps` features from `simple_logger` in dev-dependencies. The time crate is intermittently failing to get local timezone offset and causing a crash while logging.
 * Add `dht::operations` module with functions to announce_peer, find_node, and get_peers.
+* Change `dht_node` example to accept a command line argument for its HTTP status server's listen IP/port. So you can change the default from 127.0.0.1 to 0.0.0.0 (or whatever) as desired.
 
 ## [v2.0.1] - 2022-01-01
 * Fix a Windows-only bug that can cause DHTSocket to error if someone sends it a datagram larger than the receive buffer.
