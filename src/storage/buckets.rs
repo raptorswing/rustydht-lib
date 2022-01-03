@@ -45,6 +45,18 @@ impl<T: Bucketable> Buckets<T> {
         self.buckets.push(Vec::with_capacity(2 * self.k));
     }
 
+    pub fn contains(&self, id: &Id) -> bool {
+        let dest_bucket_idx = self.get_dest_bucket_idx_for_id(&id);
+        if let Some(bucket) = self.buckets.get(dest_bucket_idx) {
+            for item in bucket.iter() {
+                if item.get_id() == *id {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn count(&self) -> usize {
         let mut count = 0;
         for bucket in &self.buckets {
@@ -70,6 +82,9 @@ impl<T: Bucketable> Buckets<T> {
         None
     }
 
+    /// Get the `k` nearest nodes/items stored in the buckets
+    ///
+    /// The returned vector is sorted by distance, from nearest to farthest.
     pub fn get_nearest_nodes(&self, id: &Id, exclude: Option<&Id>) -> Vec<&T> {
         let mut all: Vec<&T> = self
             .values()

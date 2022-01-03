@@ -2,6 +2,7 @@
 
 ## [Unreleased] - 2022-01-02
 * Remove `timestamps` features from `simple_logger` in dev-dependencies. The time crate is intermittently failing to get local timezone offset and causing a crash while logging.
+* Add `dht::operations` module with functions to announce_peer, find_node, and get_peers.
 
 ## [v2.0.1] - 2022-01-01
 * Fix a Windows-only bug that can cause DHTSocket to error if someone sends it a datagram larger than the receive buffer.

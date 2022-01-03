@@ -29,6 +29,7 @@ use std::time::Duration;
 ///     .build()
 ///     .unwrap();
 /// ```
+#[derive(Clone)]
 pub struct MessageBuilder {
     message_type: BuilderMessageType,
 
@@ -52,6 +53,7 @@ pub struct MessageBuilder {
 }
 
 /// All the different types of Message that a MesssageBuilder can build
+#[derive(Clone)]
 enum BuilderMessageType {
     PingRequest,
     PingResponse,

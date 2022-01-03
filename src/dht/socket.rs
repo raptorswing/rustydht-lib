@@ -67,8 +67,6 @@ impl DHTSocket {
         dest: SocketAddr,
         dest_id: Option<Id>,
     ) -> Result<Option<mpsc::Receiver<packets::Message>>, RustyDHTError> {
-        trace!(target: "rustydht_lib::DHTSocket", "Caller wants to send_to {:?} to {}", to_send, dest);
-
         let mut to_ret = None;
         // optimization to only store notification stuff on requests (not on replies too)
         if let packets::MessageType::Request(_) = to_send.message_type {
@@ -175,31 +173,53 @@ impl DHTSocket {
             .recv_from(&mut buf)
             .await
             .map_err(|e| RustyDHTError::SocketRecvError(e.into()))?;
+        trace!(target:"rustydht_lib::DHTSocket", "Receiving {} bytes from {}", num_bytes, sender);
         let message = packets::Message::from_bytes(&buf[..num_bytes])?;
-        trace!(target:"rustydht_lib::DHTSocket", "Receiving {:?} from {}", message, sender);
 
-        let request_info = {
-            request_storage
-                .lock()
-                .unwrap()
-                .take_matching_request_info(&message, sender)
-        };
-        // Is this message a reply to something we sent? If so, notify via specific channel
-        if let Some(request_info) = request_info {
-            if let Some(response_channel) = request_info.response_channel {
-                if let Err(e) = response_channel.send(message.clone()).await {
-                    let message = e.0;
-                    warn!(target: "rustydht_lib::DHTSocket", "Got response, but sending code abandoned the channel receiver. So sad. Response: {:?}. Sender: {:?}", message, sender);
+        match message.message_type {
+            packets::MessageType::Response(_) => {
+                let request_info = {
+                    request_storage
+                        .lock()
+                        .unwrap()
+                        .take_matching_request_info(&message, sender)
+                };
+
+                match request_info {
+                    Some(request_info) => {
+                        match request_info.response_channel {
+                            Some(response_channel) => {
+                                if let Err(e) = response_channel.send(message.clone()).await {
+                                    let message = e.0;
+                                    warn!(target: "rustydht_lib::DHTSocket", "Got response, but sending code abandoned the channel receiver. So sad. Response: {:?}. Sender: {:?}", message, sender);
+                                }
+                            }
+                            None => { /*It's fine if there's no channel - just means that the sender didn't care about getting a response*/
+                            }
+                        }
+
+                        // Since the response is to a valid request, send it to the general recv channel
+                        recv_from_tx
+                            .send((message, sender))
+                            .await
+                            .map_err(|e| RustyDHTError::GeneralError(e.into()))?;
+                    }
+
+                    None => {
+                        warn!(target: "rusydht_lib::DHTSocket", "Received spurious response {:?} from {}", message, sender);
+                    }
                 }
-            } else {
-                warn!(target: "rustydht_lib::DHTSocket", "Got response, but can't notify due to no channel. I should make channel required. Response: {:?}. Sender: {:?}", message, sender);
             }
-        }
-        // Always send it to the generic recv_from channel
-        recv_from_tx
-            .send((message, sender))
-            .await
-            .map_err(|e| RustyDHTError::GeneralError(e.into()))?;
+
+            _ => {
+                // Request and Error messages always get sent to the general recv channel
+                recv_from_tx
+                    .send((message, sender))
+                    .await
+                    .map_err(|e| RustyDHTError::GeneralError(e.into()))?;
+            }
+        };
+
         Ok(())
     }
 

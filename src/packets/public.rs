@@ -2,7 +2,6 @@ use super::internal;
 use crate::common::{Id, Node, ID_SIZE};
 use crate::errors;
 use anyhow::anyhow;
-use log::warn;
 use std::convert::TryInto;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -524,6 +523,13 @@ impl Message {
         Message::from_serde_message(internal::DHTMessage::from_bytes(bytes)?)
     }
 
+    /// Return the Id of the sender of the Message
+    ///
+    /// This is less straightforward than it seems because not *all* messages are sent
+    /// with an Id (all are except Error messages). This is reflected in the structure
+    /// of DHT Messages, and makes it a bit annoying to learn the sender's Id without
+    /// unraveling the entire message. This method is a convenience method to extract
+    /// the sender (or "author") Id from the guts of any Message.
     pub fn get_author_id(&self) -> Option<Id> {
         let id = match &self.message_type {
             MessageType::Request(request_variant) => match request_variant {
@@ -556,6 +562,11 @@ pub fn response_matches_request(res: &ResponseSpecific, req: &RequestSpecific) -
             if let RequestSpecific::PingRequest { .. } = req {
                 return true;
             }
+
+            // Ping responses are indistinguishable from announce_peer responses
+            if let RequestSpecific::AnnouncePeerRequest { .. } = req {
+                return true;
+            }
         }
 
         ResponseSpecific::FindNodeResponse { .. } => {
@@ -564,11 +575,16 @@ pub fn response_matches_request(res: &ResponseSpecific, req: &RequestSpecific) -
             }
         }
 
-        _ => {
-            warn!(target: "rustydht_lib::response_matches_request",
-                "Unimplemented response type {:?}",
-                res
-            );
+        ResponseSpecific::GetPeersResponse { .. } => {
+            if let RequestSpecific::GetPeersRequest { .. } = req {
+                return true;
+            }
+        }
+
+        ResponseSpecific::SampleInfoHashesResponse { .. } => {
+            if let RequestSpecific::SampleInfoHashesRequest { .. } = req {
+                return true;
+            }
         }
     }
     return false;

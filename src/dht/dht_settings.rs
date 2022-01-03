@@ -6,6 +6,7 @@
 /// Use [DHTSettings::default()](crate::dht::DHTSettings::default) to create an instance with the
 /// 'recommended' defaults (which can be customized). Or instantiate your own
 /// with `let settings = DHTSettings {/* your settings here */};`
+#[derive(Clone)]
 pub struct DHTSettings {
     /// Number of bytes for token secrets for get_peers responses
     pub token_secret_size: usize,
@@ -56,6 +57,12 @@ pub struct DHTSettings {
 
     /// We'll think about pruning outgoing requests at this interval
     pub outgoing_reqiest_check_interval_secs: u64,
+
+    /// If true, we will set the read only flag in outgoing requests to prevent
+    /// other nodes from adding us to their routing tables. This is useful if
+    /// we're behind a restrictive NAT/firewall and can't accept incoming
+    /// packets from IPs that we haven't sent anything to.
+    pub read_only: bool,
 }
 
 impl DHTSettings {
@@ -78,6 +85,7 @@ impl DHTSettings {
             ping_check_interval_secs: 10,
             outgoing_request_prune_secs: 30,
             outgoing_reqiest_check_interval_secs: 30,
+            read_only: false,
         }
     }
 }
