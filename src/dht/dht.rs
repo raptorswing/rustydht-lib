@@ -321,6 +321,40 @@ impl DHT {
         }
     }
 
+    /// Carries out some common tasks for each incoming request
+    ///
+    /// 1. Determines if the requester's id is valid for their IP
+    /// 2. Makes sure they have a chance to join the routing table
+    fn common_request_handling(
+        &self,
+        remote_addr: SocketAddr,
+        msg: &packets::Message,
+    ) -> Result<(), RustyDHTError> {
+        let sender_id = match msg.get_author_id() {
+            Some(sender_id) => sender_id,
+            None => {
+                return Err(RustyDHTError::PacketParseError(anyhow!(
+                    "Failed to extract sender's id"
+                )));
+            }
+        };
+
+        // Is id valid for IP?
+        let is_id_valid = sender_id.is_valid_for_ip(&remote_addr.ip());
+        let read_only = match msg.read_only {
+            Some(ro) => ro,
+            _ => false,
+        };
+        if is_id_valid && !read_only {
+            self.state
+                .try_lock()
+                .unwrap()
+                .buckets
+                .add_or_update(Node::new(sender_id, remote_addr), false);
+        }
+        Ok(())
+    }
+
     async fn accept_single_packet(
         &self,
         msg: packets::Message,
@@ -330,19 +364,7 @@ impl DHT {
             packets::MessageType::Request(request_variant) => {
                 match request_variant {
                     packets::RequestSpecific::PingRequest(arguments) => {
-                        // Is id valid for IP?
-                        let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
-                        let read_only = match msg.read_only {
-                            Some(ro) => ro,
-                            _ => false,
-                        };
-                        if is_id_valid && !read_only {
-                            self.state
-                                .try_lock()
-                                .unwrap()
-                                .buckets
-                                .add_or_update(Node::new(arguments.requester_id, addr), false);
-                        }
+                        self.common_request_handling(addr, &msg)?;
 
                         // Build a ping reply
                         let reply = MessageBuilder::new_ping_response()
@@ -356,19 +378,9 @@ impl DHT {
                     }
 
                     packets::RequestSpecific::GetPeersRequest(arguments) => {
+                        self.common_request_handling(addr, &msg)?;
                         let reply = {
-                            let mut state = self.state.try_lock().unwrap();
-                            // Is id valid for IP?
-                            let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
-                            let read_only = match msg.read_only {
-                                Some(ro) => ro,
-                                _ => false,
-                            };
-                            if is_id_valid && !read_only {
-                                state
-                                    .buckets
-                                    .add_or_update(Node::new(arguments.requester_id, addr), false);
-                            }
+                            let state = self.state.try_lock().unwrap();
 
                             // First, see if we have any peers for their info_hash
                             let peers = {
@@ -415,20 +427,9 @@ impl DHT {
                     }
 
                     packets::RequestSpecific::FindNodeRequest(arguments) => {
+                        self.common_request_handling(addr, &msg)?;
                         let reply = {
-                            let mut state = self.state.try_lock().unwrap();
-                            // Is id valid for IP?
-                            let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
-                            let read_only = match msg.read_only {
-                                Some(ro) => ro,
-                                _ => false,
-                            };
-                            if is_id_valid && !read_only {
-                                state
-                                    .buckets
-                                    .add_or_update(Node::new(arguments.requester_id, addr), false);
-                            }
-                            // We're fine to respond regardless
+                            let state = self.state.try_lock().unwrap();
                             let nearest = state.buckets.get_nearest_nodes(
                                 &arguments.target,
                                 Some(&arguments.requester_id),
@@ -447,25 +448,14 @@ impl DHT {
                     }
 
                     packets::RequestSpecific::AnnouncePeerRequest(arguments) => {
+                        self.common_request_handling(addr, &msg)?;
                         let reply = {
                             let mut state = self.state.try_lock().unwrap();
-                            let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
-                            let read_only = match msg.read_only {
-                                Some(ro) => ro,
-                                _ => false,
-                            };
 
                             let is_token_valid = arguments.token
                                 == calculate_token(&addr, state.token_secret.clone())
                                 || arguments.token
                                     == calculate_token(&addr, state.old_token_secret.clone());
-
-                            if is_id_valid && !read_only {
-                                state.buckets.add_or_update(
-                                    Node::new(arguments.requester_id, addr),
-                                    is_token_valid,
-                                );
-                            }
 
                             if is_token_valid {
                                 let sockaddr = match arguments.implied_port {
@@ -502,18 +492,9 @@ impl DHT {
                     }
 
                     packets::RequestSpecific::SampleInfoHashesRequest(arguments) => {
+                        self.common_request_handling(addr, &msg)?;
                         let reply = {
-                            let mut state = self.state.try_lock().unwrap();
-                            let is_id_valid = arguments.requester_id.is_valid_for_ip(&addr.ip());
-                            let read_only = match msg.read_only {
-                                Some(ro) => ro,
-                                _ => false,
-                            };
-                            if is_id_valid && !read_only {
-                                state
-                                    .buckets
-                                    .add_or_update(Node::new(arguments.requester_id, addr), false);
-                            }
+                            let state = self.state.try_lock().unwrap();
 
                             let nearest = state.buckets.get_nearest_nodes(
                                 &arguments.target,
