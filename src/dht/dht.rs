@@ -268,14 +268,38 @@ impl DHT {
 
 impl DHT {
     async fn accept_incoming_packets(&self) -> Result<(), RustyDHTError> {
-        let mut throttler = Throttler::new(
+        let mut throttler = Throttler::<32>::new(
             10,
             Duration::from_secs(6),
             Duration::from_secs(60),
             Duration::from_secs(86400),
         );
+        let read_only = self.state.try_lock().unwrap().settings.read_only;
         loop {
-            match self.accept_single_packet(&mut throttler).await {
+            match async {
+                let (msg, addr) = self.socket.recv_from().await?;
+
+                // Drop the packet if the IP has been throttled.
+                if throttler.check_throttle(addr.ip(), None, None) {
+                    return Ok(());
+                }
+
+                // Filter out packets sent from port 0. We can't reply to these.
+                if addr.port() == 0 {
+                    warn!(target: "rustydht_lib::DHT", "{} has invalid port - dropping packet", addr);
+                    return Ok(());
+                }
+
+                // Respond to requests, but only if we're not read-only
+                if !read_only {
+                    self.accept_single_packet(msg.clone(), addr).await?;
+                }
+
+                // Send a MessageReceivedEvent to any subscribers
+                self.send_packet_to_subscribers(msg, addr).await;
+
+                Ok::<(), RustyDHTError>(())
+            }.await {
                 Ok(_) => continue,
 
                 Err(err) => match err {
@@ -299,25 +323,9 @@ impl DHT {
 
     async fn accept_single_packet(
         &self,
-        throttler: &mut Throttler<32>,
+        msg: packets::Message,
+        addr: SocketAddr,
     ) -> Result<(), RustyDHTError> {
-        let (msg, addr) = self.socket.recv_from().await?;
-
-        // Drop the packet if the IP has been throttled.
-        if throttler.check_throttle(addr.ip(), None, None) {
-            return Ok(());
-        }
-
-        // Filter out packets sent from port 0. We can't reply to these.
-        if addr.port() == 0 {
-            warn!(target: "rustydht_lib::DHT", "{} has invalid port - dropping packet", addr);
-            return Ok(());
-        }
-
-        // We'll use this clone to send an event later.
-        // "It's a surprise tool that will help us later!"
-        let msg_event_clone = msg.clone();
-
         match &msg.message_type {
             packets::MessageType::Request(request_variant) => {
                 match request_variant {
@@ -562,34 +570,32 @@ impl DHT {
             }
         }
 
-        {
-            // Notify any subscribers about the event
-            let event = DHTEvent {
-                event_type: DHTEventType::MessageReceived(MessageReceivedEvent {
-                    message: msg_event_clone,
-                }),
-            };
-            let mut state = self.state.lock().unwrap();
-            state.subscribers.retain(|sub| {
-                eprintln!("Gotta do notifications for {:?}", event);
-                match sub.try_send(event.clone()) {
-                    Ok(()) => true,
-                    Err(e) => match e {
-                        tokio::sync::mpsc::error::TrySendError::Closed(_) => {
-                            // Remove the sender from the subscriptions since they hung up on us (rude)
-                            trace!(target: "rustydht_lib::DHT", "Removing channel for closed DHTEvent subscriber");
-                            false
-                        }
-                        tokio::sync::mpsc::error::TrySendError::Full(_) => {
-                            warn!(target: "rustydht_lib::DHT", "DHTEvent subscriber channel is full - can't send event {:?}", event);
-                            true
-                        }
+        return Ok(());
+    }
+
+    async fn send_packet_to_subscribers(&self, msg: packets::Message, _addr: SocketAddr) {
+        // Notify any subscribers about the event
+        let event = DHTEvent {
+            event_type: DHTEventType::MessageReceived(MessageReceivedEvent { message: msg }),
+        };
+        let mut state = self.state.lock().unwrap();
+        state.subscribers.retain(|sub| {
+            eprintln!("Gotta do notifications for {:?}", event);
+            match sub.try_send(event.clone()) {
+                Ok(()) => true,
+                Err(e) => match e {
+                    tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                        // Remove the sender from the subscriptions since they hung up on us (rude)
+                        trace!(target: "rustydht_lib::DHT", "Removing channel for closed DHTEvent subscriber");
+                        false
+                    }
+                    tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                        warn!(target: "rustydht_lib::DHT", "DHTEvent subscriber channel is full - can't send event {:?}", event);
+                        true
                     }
                 }
-            });
-        }
-
-        return Ok(());
+            }
+        });
     }
 
     async fn periodic_buddy_ping(
