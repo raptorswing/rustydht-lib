@@ -5,6 +5,7 @@
 * Add `dht::operations` module with functions to announce_peer, find_node, and get_peers.
 * Change `dht_node` example to accept a command line argument for its HTTP status server's listen IP/port. So you can change the default from 127.0.0.1 to 0.0.0.0 (or whatever) as desired.
 * Fixed DHT behavior in read-only mode. It will no longer respond to requests in read-only mode.
+* Fix `dht_node` example invocation in README.md
 * Refactor common DHT request handling code into a common method.
 
 ## [v2.0.1] - 2022-01-01
