@@ -1,6 +1,6 @@
 # rustydht-lib changelog
 
-## [Unreleased] - 2022-01-02
+## [v2.1.0] - 2022-01-04
 * Remove `timestamps` features from `simple_logger` in dev-dependencies. The time crate is intermittently failing to get local timezone offset and causing a crash while logging.
 * Add `dht::operations` module with functions to announce_peer, find_node, and get_peers.
 * Change `dht_node` example to accept a command line argument for its HTTP status server's listen IP/port. So you can change the default from 127.0.0.1 to 0.0.0.0 (or whatever) as desired.
@@ -16,6 +16,6 @@
 * Add MessageBuilder, a fluent interface for building Message structs. Remove the old create_ methods for creating Messages. This change makes breaking changes to the public API, and is the reason for the major version bump.
 * Add an example called `dht_node` to the examples/ folder. It runs a DHT node and provides a simple HTTP status page.
 
-[Unreleased]: https://github.com/raptorswing/rustydht-lib/compare/v2.0.1...main
+[v2.1.0]: https://github.com/raptorswing/rustydht-lib/compare/v2.0.1...v2.1.0
 [v2.0.1]: https://github.com/raptorswing/rustydht-lib/compare/v2.0.0...v2.0.1
 [v2.0.0]: https://github.com/raptorswing/rustydht-lib/compare/v1.0.0...v2.0.0
