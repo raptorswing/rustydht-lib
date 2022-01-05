@@ -7,6 +7,7 @@
 * Fixed DHT behavior in read-only mode. It will no longer respond to requests in read-only mode.
 * Fix `dht_node` example invocation in README.md
 * Refactor common DHT request handling code into a common method.
+* Change `dht_node` example's 'authors' and 'version' help metadata to be tied to the crate.
 
 ## [v2.0.1] - 2022-01-01
 * Fix a Windows-only bug that can cause DHTSocket to error if someone sends it a datagram larger than the receive buffer.

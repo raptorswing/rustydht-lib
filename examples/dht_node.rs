@@ -26,9 +26,9 @@ async fn main() {
         .expect("Failed to initialize logging");
 
     let matches = App::new("dht_node")
-        .version("0.1")
-        .author("raptorswing")
-        .about("Example application for rustydht-lib. Acts as a Node on the mainline BitTorrent DHT network, runs a small HTTP status page.")
+        .version(env!("CARGO_PKG_VERSION"))
+        .author(env!("CARGO_PKG_AUTHORS"))
+        .about("Example application for rustydht-lib. Acts as a Node on the mainline BitTorrent DHT network, and runs a small HTTP status page.")
         .arg(
             Arg::with_name("listen_port")
             .short("l")
