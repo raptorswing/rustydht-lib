@@ -72,6 +72,18 @@ pub trait NodeStorage: DynClone + Send {
 
 dyn_clone::clone_trait_object!(NodeStorage);
 
+/// Implements the XOR distance-based bucketing system described in
+/// [BEP0005](http://www.bittorrent.org/beps/bep_0005.html) (more or less).
+///
+/// NodeBucketStorage keeps one bucket with capacity `k` for each bit of the DHT's
+/// info hashes. Since the mainline DHT uses 20 byte (160 bit) info hashes, this
+/// object will by default keep a maximum of 160 buckets of size `k`.
+///
+/// As described in BEP0005, the buckets are organized according to an XOR distance metric
+/// so that Nodes with ids closer to our DHT's Id are given the most storage space.
+/// The first bucket stores Nodes that have a zero (or more) bit prefix in common with the DHT Id.
+/// The second bucket stores Nodes that have a one (or more) bit prefix in common with the DHT Id.
+/// Two or more bits in the third. Three or more bits in the 4th. And so on.
 #[derive(Clone)]
 pub struct NodeBucketStorage {
     verified: Buckets<NodeWrapper>,
@@ -79,6 +91,12 @@ pub struct NodeBucketStorage {
 }
 
 impl NodeBucketStorage {
+    /// Create a new NodeBucketStorage.
+    ///
+    /// # Parameters
+    /// * `our_id` - the current Id of the DHT node that will use this object for storage. Nodes will
+    /// be assigned to buckets based on the XOR distance between their Id and this one.
+    /// * `k` - the number of nodes that can be stored in a bucket.
     pub fn new(our_id: Id, k: usize) -> NodeBucketStorage {
         NodeBucketStorage {
             verified: Buckets::new(our_id, k),
