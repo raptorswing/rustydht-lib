@@ -6,28 +6,84 @@ use std::time::{Duration, Instant};
 
 use log::trace;
 
+/// Trait for things that can store DHT nodes
+///
+/// [DHT](crate::dht::DHT) uses an object implementing this trait to keep
+/// track of other nodes on the network. The default implementation is
+/// [NodeBucketStorage](crate::storage::node_bucket_storage::NodeBucketStorage)
+/// but DHT can accept any object that implements this trait.
 pub trait NodeStorage: DynClone + Send {
+    /// Add a Node to storage, or update the record of a Node already in storage.
+    ///
+    /// # Parameters
+    /// * `node` - The Node to add or update
+    /// * `verified` - Set true if the caller knows the Node is live and can communicate
+    /// with it (i.e. we've sent a request and received a response). If true, the
+    /// `last_verified` and `last_seen` properties of
+    /// [NodeWrapper](crate::storage::node_wrapper::NodeWrapper) will be updated.
+    /// If false, only `last_seen` will be updated.
     fn add_or_update(&mut self, node: Node, verified: bool);
+
+    /// Erase all Nodes from storage, resetting this object to its empty state
     fn clear(&mut self);
 
-    fn count_buckets(&self) -> usize;
-
-    /// Returns a tuple of (unverified, verified)
+    /// Return the number of Nodes that have been verified (`last_verified`
+    /// property is not None) and the number that haven't.
+    ///
+    /// Returned as a tuple of `(unverified count, verified count)`
     fn count(&self) -> (usize, usize);
 
+    /// Return a copy of the records for all the unverified Nodes
     fn get_all_unverified(&self) -> Vec<NodeWrapper>;
+
+    /// Return a copy of the records for all verified Nodes
     fn get_all_verified(&self) -> Vec<NodeWrapper>;
+
+    /// Return a copy of the nearest nodes to the provided Id.
+    ///
+    /// # Parameters
+    /// * `id` - the target id. Nodes that are near this Id (based on
+    /// XOR distance metric) should be returned.
+    /// * `exclude` - If there's a Node that you know will be near
+    /// `id` and you don't want to see it, you can exclude it by
+    /// providing its Id here.
     fn get_nearest_nodes(&self, id: &Id, exclude: Option<&Id>) -> Vec<Node>;
 
-    /// Prunes verified to unverified. Prunes unverified to death.
-    /// In limited cases pruning may not occur as soon as it can due to overflow issues with the monotonic clock.
-    /// So the grace_periods are really minimum durations that an entry will go before being pruned.
+    /// Prune (remove) records of Nodes tht haven't been seen/verified recently.node_wrapper
+    ///
+    /// # Parameters
+    /// * `grace_period` - Previously verified Nodes are dropped if their `last_verified`
+    /// property is None or less than `(now - grace_period)`.
+    /// * `unverified_grace_period` -  Previously seen (but not verified) Nodes are dropped
+    /// if their `last_seen` property is less than `(now - unverified_grace_period)`
     fn prune(&mut self, grace_period: Duration, unverified_grace_period: Duration);
+
+    /// Set our own DHT node's Id.
+    ///
+    /// This is used by implementations that use XOR distance from our own Id as part of
+    /// their internal storage algorithm (the normal DHT bucket storage does this). But
+    /// implementations are free to **ignore** this if they want.
+    ///
+    /// Some implementations may reset
+    /// (similar to invoking [clear()](crate::storage::node_bucket_storage::NodeStorage::clear))
+    /// when this method is called.
     fn set_id(&mut self, our_id: Id);
 }
 
 dyn_clone::clone_trait_object!(NodeStorage);
 
+/// Implements the XOR distance-based bucketing system described in
+/// [BEP0005](http://www.bittorrent.org/beps/bep_0005.html) (more or less).
+///
+/// NodeBucketStorage keeps one bucket with capacity `k` for each bit of the DHT's
+/// info hashes. Since the mainline DHT uses 20 byte (160 bit) info hashes, this
+/// object will by default keep a maximum of 160 buckets of size `k`.
+///
+/// As described in BEP0005, the buckets are organized according to an XOR distance metric
+/// so that Nodes with ids closer to our DHT's Id are given the most storage space.
+/// The first bucket stores Nodes that have a zero (or more) bit prefix in common with the DHT Id.
+/// The second bucket stores Nodes that have a one (or more) bit prefix in common with the DHT Id.
+/// Two or more bits in the third. Three or more bits in the 4th. And so on.
 #[derive(Clone)]
 pub struct NodeBucketStorage {
     verified: Buckets<NodeWrapper>,
@@ -35,6 +91,12 @@ pub struct NodeBucketStorage {
 }
 
 impl NodeBucketStorage {
+    /// Create a new NodeBucketStorage.
+    ///
+    /// # Parameters
+    /// * `our_id` - the current Id of the DHT node that will use this object for storage. Nodes will
+    /// be assigned to buckets based on the XOR distance between their Id and this one.
+    /// * `k` - the number of nodes that can be stored in a bucket.
     pub fn new(our_id: Id, k: usize) -> NodeBucketStorage {
         NodeBucketStorage {
             verified: Buckets::new(our_id, k),
@@ -109,10 +171,6 @@ impl NodeStorage for NodeBucketStorage {
     fn clear(&mut self) {
         self.unverified.clear();
         self.verified.clear();
-    }
-
-    fn count_buckets(&self) -> usize {
-        self.verified.count_buckets()
     }
 
     fn count(&self) -> (usize, usize) {

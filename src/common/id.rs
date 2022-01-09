@@ -152,6 +152,7 @@ impl Id {
         Ok(mutant)
     }
 
+    /// An Id with all of its bits set to 0
     pub const ZERO: Self = Id {
         bytes: [0; ID_SIZE],
     };

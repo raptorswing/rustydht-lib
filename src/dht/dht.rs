@@ -595,10 +595,9 @@ impl DHT {
                 let mut state = self.state.try_lock().unwrap();
                 let count = state.buckets.count();
                 debug!(target: "rustydht_lib::DHT",
-                    "Pruning node buckets. Storage has {} unverified, {} verified in {} buckets",
+                    "Pruning node buckets. Storage has {} unverified, {} verified",
                     count.0,
                     count.1,
-                    state.buckets.count_buckets()
                 );
                 let reverify_grace_period_secs = state.settings.reverify_grace_period_secs;
                 let verify_grace_period_secs = state.settings.verify_grace_period_secs;
