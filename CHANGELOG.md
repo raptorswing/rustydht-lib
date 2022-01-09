@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 * Add a `DHTBuilder` for more easily constructing DHT objects. Add a `DHTSettingsBuilder` for more easily constructing DHTSettings objects. Revise `DHT::new()` (this is a breaking change to the public API).
+* Remove `count_buckets` method from `NodeStorage` trait. This was an implementation detail of bucket-based storage leaking into the trait, which should be more generic. This is a breaking change to the public API.
+* Add documentation to `NodeStorage`, `NodeBucketStorage`, and `NodeWrapper`.
 
 ## [v2.1.0] - 2022-01-04
 * Remove `timestamps` features from `simple_logger` in dev-dependencies. The time crate is intermittently failing to get local timezone offset and causing a crash while logging.
@@ -20,6 +22,7 @@
 * Add MessageBuilder, a fluent interface for building Message structs. Remove the old create_ methods for creating Messages. This change makes breaking changes to the public API, and is the reason for the major version bump.
 * Add an example called `dht_node` to the examples/ folder. It runs a DHT node and provides a simple HTTP status page.
 
+[Unreleased]: https://github.com/raptorswing/rustydht-lib/compare/v2.1.0...main
 [v2.1.0]: https://github.com/raptorswing/rustydht-lib/compare/v2.0.1...v2.1.0
 [v2.0.1]: https://github.com/raptorswing/rustydht-lib/compare/v2.0.0...v2.0.1
 [v2.0.0]: https://github.com/raptorswing/rustydht-lib/compare/v1.0.0...v2.0.0
