@@ -10,8 +10,6 @@ pub trait NodeStorage: DynClone + Send {
     fn add_or_update(&mut self, node: Node, verified: bool);
     fn clear(&mut self);
 
-    fn count_buckets(&self) -> usize;
-
     /// Returns a tuple of (unverified, verified)
     fn count(&self) -> (usize, usize);
 
@@ -109,10 +107,6 @@ impl NodeStorage for NodeBucketStorage {
     fn clear(&mut self) {
         self.unverified.clear();
         self.verified.clear();
-    }
-
-    fn count_buckets(&self) -> usize {
-        self.verified.count_buckets()
     }
 
     fn count(&self) -> (usize, usize) {
