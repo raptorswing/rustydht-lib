@@ -4,14 +4,29 @@ use std::net::Ipv4Addr;
 
 use log::debug;
 
+/// Represents an object with methods for figuring out the DHT node's external IPv4 address
 pub trait IPV4AddrSource: DynClone + Send {
-    /// Retrieves the IPv4 address that the source thinks we should have, or None if it can't make a determination.
+    /// Retrieves the IPv4 address that the source thinks we should have,
+    /// or None if it can't make a determination at this time.
+    ///
+    /// This method will be called periodically by the DHT. Implementations
+    /// should return their current best guess for the external (globally routable) IPv4 address
+    /// of the DHT.
     fn get_best_ipv4(&self) -> Option<Ipv4Addr>;
 
     /// Adds a "vote" from another node in the DHT in respose to our queries.
+    ///
+    /// DHT will call this method when it receive a "hint" from another DHT node
+    /// about our external IPv4 address. An IPV4AddrSource implementation can
+    /// use these "hints" or "votes", or ignore them.
+    ///
+    /// # Parameters
+    /// * `their_addr` - The IP address of the DHT node that we're learning this information from.
+    /// * `proposed_addr` - The external IP address that the other DHT node says we have.
     fn add_vote(&mut self, their_addr: Ipv4Addr, proposed_addr: Ipv4Addr);
 
-    /// This will get called at some regular interval - an opportunity to allow votes to decay over time.
+    /// This will get called by DHT at some regular interval. Implementations
+    /// can use it to allow old information to "decay" over time.
     fn decay(&mut self);
 }
 
