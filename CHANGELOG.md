@@ -1,5 +1,8 @@
 # rustydht-lib changelog
 
+## [Unreleased]
+* Add a `DHTBuilder` for more easily constructing DHT objects. Add a `DHTSettingsBuilder` for more easily constructing DHTSettings objects. Revise `DHT::new()` (this is a breaking change to the public API).
+
 ## [v2.1.0] - 2022-01-04
 * Remove `timestamps` features from `simple_logger` in dev-dependencies. The time crate is intermittently failing to get local timezone offset and causing a crash while logging.
 * Add `dht::operations` module with functions to announce_peer, find_node, and get_peers.

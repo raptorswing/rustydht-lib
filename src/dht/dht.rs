@@ -14,7 +14,7 @@ extern crate crc;
 use crc::{crc32, Hasher32};
 
 use std::convert::TryInto;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -40,7 +40,6 @@ struct DHTState {
     peer_storage: PeerStorage,
     token_secret: Vec<u8>,
     old_token_secret: Vec<u8>,
-    routers: Vec<String>,
     settings: DHTSettings,
     subscribers: Vec<mpsc::Sender<DHTEvent>>,
 }
@@ -95,18 +94,14 @@ impl DHT {
     /// (or routing table) of the DHT.
     /// * `routers` - Array of string slices with hostname:port of DHT routers. These help us get bootstrapped onto the network.
     /// * `settings` - DHTSettings struct containing settings that DHT will use.
-    pub async fn new<B>(
+    pub fn new(
         shutdown: shutdown::ShutdownReceiver,
         id: Option<Id>,
-        listen_port: u16,
+        socket_addr: std::net::SocketAddr,
         ip4_source: Box<dyn IPV4AddrSource + Send>,
-        buckets: B,
-        routers: &[&str],
+        mut buckets: Box<dyn NodeStorage + Send>,
         settings: DHTSettings,
-    ) -> Result<DHT, RustyDHTError>
-    where
-        B: FnOnce(Id) -> Box<dyn NodeStorage + Send>,
-    {
+    ) -> Result<DHT, RustyDHTError> {
         // If we were given a hardcoded id, use that until/unless we decide its invalid based on IP source.
         // If we weren't given a hardcoded id, try to generate one based on IP source.
         // Finally, if all else fails, generate a totally random id.
@@ -133,15 +128,19 @@ impl DHT {
             }
         };
 
+        buckets.set_id(our_id);
+
         // Setup our UDP socket
         let socket = {
-            let our_sockaddr =
-                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), listen_port));
-            UdpSocket::bind(our_sockaddr)
-                .await
-                .map_err(|e| RustyDHTError::GeneralError(e.into()))?
+            let std_sock = std::net::UdpSocket::bind(socket_addr)
+                .map_err(|e| RustyDHTError::GeneralError(e.into()))?;
+            std_sock
+                .set_nonblocking(true)
+                .map_err(|e| RustyDHTError::GeneralError(e.into()))?;
+            let tokio_sock =
+                UdpSocket::from_std(std_sock).map_err(|e| RustyDHTError::GeneralError(e.into()))?;
+            Arc::new(DHTSocket::new(shutdown.clone(), tokio_sock))
         };
-        let socket = Arc::new(DHTSocket::new(shutdown.clone(), socket));
 
         let token_secret = make_token_secret(settings.token_secret_size);
 
@@ -150,14 +149,13 @@ impl DHT {
             state: Arc::new(Mutex::new(DHTState {
                 ip4_source: ip4_source,
                 our_id: our_id,
-                buckets: buckets(our_id),
+                buckets: buckets,
                 peer_storage: PeerStorage::new(
                     settings.max_torrents,
                     settings.max_peers_per_torrent,
                 ),
                 token_secret: token_secret.clone(),
                 old_token_secret: token_secret,
-                routers: routers.iter().map(|s| String::from(*s)).collect(),
                 settings: settings,
                 subscribers: vec![],
             })),
@@ -915,7 +913,7 @@ impl DHT {
         shutdown: shutdown::ShutdownReceiver,
     ) -> Result<(), RustyDHTError> {
         let mut futures = futures::stream::FuturesUnordered::new();
-        let routers = self.state.try_lock().unwrap().routers.clone();
+        let routers = self.state.try_lock().unwrap().settings.routers.clone();
         for hostname in routers {
             let shutdown_clone = shutdown.clone();
             futures.push(self.ping_router(shutdown_clone, hostname));
@@ -1024,32 +1022,25 @@ fn make_token_secret(size: usize) -> Vec<u8> {
 mod test {
     use super::*;
     use crate::common::ipv4_addr_src::StaticIPV4AddrSource;
+    use crate::dht::DHTBuilder;
+    use crate::dht::DHTSettingsBuilder;
     use anyhow::anyhow;
     use std::boxed::Box;
+    use std::net::{Ipv4Addr, SocketAddrV4};
 
     async fn make_test_dht(
         port: u16,
     ) -> (DHT, shutdown::ShutdownSender, shutdown::ShutdownReceiver) {
         let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
         let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
-        let buckets = |id| -> Box<dyn NodeStorage + Send> {
-            Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
-                id, 8,
-            ))
-        };
         let (tx, rx) = shutdown::create_shutdown();
         (
-            DHT::new(
-                rx.clone(),
-                Some(get_dht_id()),
-                port,
-                phony_ip4,
-                buckets,
-                &[],
-                DHTSettings::default(),
-            )
-            .await
-            .unwrap(),
+            DHTBuilder::new()
+                .initial_id(get_dht_id())
+                .listen_addr(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
+                .ip_source(phony_ip4)
+                .build(rx.clone())
+                .unwrap(),
             tx,
             rx,
         )
@@ -1293,45 +1284,32 @@ mod test {
         let (mut shutdown_tx, shutdown_rx) = shutdown::create_shutdown();
         let port1 = 2171;
         let dht1 = Arc::new(
-            DHT::new(
-                shutdown_rx.clone(),
-                Some(get_dht_id()),
-                port1,
-                Box::new(StaticIPV4AddrSource::new(Ipv4Addr::new(1, 2, 3, 4))),
-                |id| -> Box<dyn NodeStorage + Send> {
-                    Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
-                        id, 8,
-                    ))
-                },
-                &[],
-                DHTSettings::default(),
-            )
-            .await
-            .unwrap(),
+            DHTBuilder::new()
+                .initial_id(get_dht_id())
+                .listen_addr(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port1))
+                .ip_source(Box::new(StaticIPV4AddrSource::new(Ipv4Addr::new(
+                    1, 2, 3, 4,
+                ))))
+                .settings(DHTSettingsBuilder::new().routers(vec![]).build())
+                .build(shutdown_rx.clone())
+                .unwrap(),
         );
 
-        let port2 = 2186;
-        let settings2 = {
-            let mut s = DHTSettings::default();
-            s.router_ping_interval_secs = 1;
-            s
-        };
         let dht2 = Arc::new(
-            DHT::new(
-                shutdown_rx.clone(),
-                Some(get_dht_id().make_mutant(4).unwrap()),
-                port2,
-                Box::new(StaticIPV4AddrSource::new(Ipv4Addr::new(1, 2, 3, 4))),
-                |id| -> Box<dyn NodeStorage + Send> {
-                    Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
-                        id, 8,
-                    ))
-                },
-                &[&format!("127.0.0.1:{}", port1)],
-                settings2,
-            )
-            .await
-            .unwrap(),
+            DHTBuilder::new()
+                .initial_id(get_dht_id().make_mutant(4).unwrap())
+                .listen_addr(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+                .ip_source(Box::new(StaticIPV4AddrSource::new(Ipv4Addr::new(
+                    1, 2, 3, 4,
+                ))))
+                .settings(
+                    DHTSettingsBuilder::new()
+                        .router_ping_interval_secs(1)
+                        .routers(vec![format!("127.0.0.1:{}", port1)])
+                        .build(),
+                )
+                .build(shutdown_rx.clone())
+                .unwrap(),
         );
 
         let mut receiver = dht2.subscribe();
@@ -1368,23 +1346,15 @@ mod test {
     async fn test_token_secret_rotation() {
         let ipv4 = Ipv4Addr::new(1, 2, 3, 4);
         let phony_ip4 = Box::new(StaticIPV4AddrSource::new(ipv4));
-        let buckets = |id| -> Box<dyn NodeStorage + Send> {
-            Box::new(crate::storage::node_bucket_storage::NodeBucketStorage::new(
-                id, 8,
-            ))
-        };
         let port = 2244;
-        let dht = DHT::new(
-            shutdown::create_shutdown().1,
-            Some(get_dht_id()),
-            port,
-            phony_ip4,
-            buckets,
-            &[],
-            DHTSettings::default(),
-        )
-        .await
-        .unwrap();
+
+        let dht = DHTBuilder::new()
+            .initial_id(get_dht_id())
+            .listen_addr(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
+            .ip_source(phony_ip4)
+            .settings(DHTSettingsBuilder::new().routers(vec![]).build())
+            .build(shutdown::create_shutdown().1)
+            .unwrap();
 
         assert_eq!(
             dht.state.try_lock().unwrap().token_secret.len(),

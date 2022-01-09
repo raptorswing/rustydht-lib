@@ -63,6 +63,12 @@ pub struct DHTSettings {
     /// we're behind a restrictive NAT/firewall and can't accept incoming
     /// packets from IPs that we haven't sent anything to.
     pub read_only: bool,
+
+    /// Vector of hostnames/ports that the DHT will use as DHT routers for
+    /// bootstrapping purposes.
+    ///
+    /// E.g., "router.example.org:6881"
+    pub routers: Vec<String>,
 }
 
 impl DHTSettings {
@@ -86,6 +92,57 @@ impl DHTSettings {
             outgoing_request_prune_secs: 30,
             outgoing_reqiest_check_interval_secs: 30,
             read_only: false,
+            routers: vec![
+                "router.bittorrent.com:6881".to_string(),
+                "router.utorrent.com:6881".to_string(),
+                "dht.transmissionbt.com:6881".to_string(),
+            ],
         }
+    }
+}
+
+#[derive(Clone)]
+/// Builder for DHTSettings
+pub struct DHTSettingsBuilder {
+    settings: DHTSettings,
+}
+
+macro_rules! make_builder_method {
+    ($prop:ident, $prop_type:ty) => {
+        pub fn $prop(mut self, $prop: $prop_type) -> Self {
+            self.settings.$prop = $prop;
+            self
+        }
+    };
+}
+
+impl DHTSettingsBuilder {
+    pub fn new() -> DHTSettingsBuilder {
+        DHTSettingsBuilder {
+            settings: DHTSettings::default(),
+        }
+    }
+
+    make_builder_method!(token_secret_size, usize);
+    make_builder_method!(max_peers_response, usize);
+    make_builder_method!(max_sample_response, usize);
+    make_builder_method!(min_sample_interval_secs, i32);
+    make_builder_method!(router_ping_interval_secs, u64);
+    make_builder_method!(reverify_interval_secs, u64);
+    make_builder_method!(reverify_grace_period_secs, u64);
+    make_builder_method!(verify_grace_period_secs, u64);
+    make_builder_method!(get_peers_freshness_secs, u64);
+    make_builder_method!(find_nodes_interval_secs, u64);
+    make_builder_method!(find_nodes_skip_count, usize);
+    make_builder_method!(max_torrents, usize);
+    make_builder_method!(max_peers_per_torrent, usize);
+    make_builder_method!(ping_check_interval_secs, u64);
+    make_builder_method!(outgoing_request_prune_secs, u64);
+    make_builder_method!(outgoing_reqiest_check_interval_secs, u64);
+    make_builder_method!(read_only, bool);
+    make_builder_method!(routers, Vec<String>);
+
+    pub fn build(self) -> DHTSettings {
+        self.settings
     }
 }

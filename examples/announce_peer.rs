@@ -1,20 +1,13 @@
 use clap::{App, Arg};
 use log::LevelFilter;
-use rustydht_lib::common::ipv4_addr_src::IPV4Consensus;
 use rustydht_lib::common::Id;
 use rustydht_lib::dht;
 use rustydht_lib::dht::operations;
 use rustydht_lib::shutdown;
-use rustydht_lib::storage::node_bucket_storage::{NodeBucketStorage, NodeStorage};
 use simple_logger::SimpleLogger;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use std::time::Duration;
-
-const ROUTERS: [&str; 3] = [
-    "router.bittorrent.com:6881",
-    "router.utorrent.com:6881",
-    "dht.transmissionbt.com:6881",
-];
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -86,22 +79,12 @@ async fn main() {
     );
 
     let (mut shutdown_tx, shutdown_rx) = shutdown::create_shutdown();
-    let ip_source = Box::new(IPV4Consensus::new(2, 10));
-    let buckets = |id| -> Box<dyn NodeStorage + Send> { Box::new(NodeBucketStorage::new(id, 8)) };
-    let mut settings = dht::DHTSettings::default();
-    settings.read_only = true;
     let dht = Arc::new(
-        dht::DHT::new(
-            shutdown_rx.clone(),
-            None,
-            port,
-            ip_source,
-            buckets,
-            &ROUTERS,
-            settings,
-        )
-        .await
-        .expect("Failed to init DHT"),
+        dht::DHTBuilder::new()
+            .listen_addr(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port))
+            .settings(dht::DHTSettingsBuilder::new().read_only(true).build())
+            .build(shutdown_rx.clone())
+            .expect("Failed to init DHT"),
     );
 
     let dht_clone = dht.clone();

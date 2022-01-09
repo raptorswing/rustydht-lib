@@ -3,19 +3,12 @@ extern crate log;
 
 use clap::{App, Arg};
 use log::LevelFilter;
-use rustydht_lib::common::ipv4_addr_src::IPV4Consensus;
 use rustydht_lib::dht;
-use rustydht_lib::storage::node_bucket_storage::{NodeBucketStorage, NodeStorage};
 use simple_logger::SimpleLogger;
 use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use warp::Filter;
-
-const ROUTERS: [&str; 3] = [
-    "router.bittorrent.com:6881",
-    "router.utorrent.com:6881",
-    "dht.transmissionbt.com:6881",
-];
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -58,28 +51,20 @@ async fn main() {
         .parse()
         .expect("Invalid value for 'http'");
 
-    let initial_id = match matches.value_of("initial_id") {
-        None => None,
-        Some(arg) => Some(
+    let mut builder =
+        dht::DHTBuilder::new().listen_addr(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port));
+
+    if let Some(arg) = matches.value_of("initial_id") {
+        builder = builder.initial_id(
             rustydht_lib::common::Id::from_hex(&arg).expect("Failed to parse initial_id into Id"),
-        ),
-    };
+        );
+    }
 
     let (mut shutdown_tx, shutdown_rx) = rustydht_lib::shutdown::create_shutdown();
-    let ip_source = Box::new(IPV4Consensus::new(2, 10));
-    let buckets = |id| -> Box<dyn NodeStorage + Send> { Box::new(NodeBucketStorage::new(id, 8)) };
     let dht = Arc::new(
-        dht::DHT::new(
-            shutdown_rx.clone(),
-            initial_id,
-            port,
-            ip_source,
-            buckets,
-            &ROUTERS,
-            dht::DHTSettings::default(),
-        )
-        .await
-        .expect("Failed to init DHT"),
+        builder
+            .build(shutdown_rx.clone())
+            .expect("Failed to init DHT"),
     );
 
     let http_server = {

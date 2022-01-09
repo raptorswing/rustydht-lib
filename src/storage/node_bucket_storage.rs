@@ -1,13 +1,12 @@
-use std::time::{Duration, Instant};
-
-use crate::common::{Id, Node};
-
 use super::buckets::Buckets;
 use super::node_wrapper::NodeWrapper;
+use crate::common::{Id, Node};
+use dyn_clone::DynClone;
+use std::time::{Duration, Instant};
 
 use log::trace;
 
-pub trait NodeStorage {
+pub trait NodeStorage: DynClone + Send {
     fn add_or_update(&mut self, node: Node, verified: bool);
     fn clear(&mut self);
 
@@ -27,6 +26,9 @@ pub trait NodeStorage {
     fn set_id(&mut self, our_id: Id);
 }
 
+dyn_clone::clone_trait_object!(NodeStorage);
+
+#[derive(Clone)]
 pub struct NodeBucketStorage {
     verified: Buckets<NodeWrapper>,
     unverified: Buckets<NodeWrapper>,
