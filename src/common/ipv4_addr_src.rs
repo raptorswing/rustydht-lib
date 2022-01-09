@@ -1,9 +1,10 @@
+use dyn_clone::DynClone;
 use std::convert::TryInto;
 use std::net::Ipv4Addr;
 
 use log::debug;
 
-pub trait IPV4AddrSource {
+pub trait IPV4AddrSource: DynClone + Send {
     /// Retrieves the IPv4 address that the source thinks we should have, or None if it can't make a determination.
     fn get_best_ipv4(&self) -> Option<Ipv4Addr>;
 
@@ -14,7 +15,10 @@ pub trait IPV4AddrSource {
     fn decay(&mut self);
 }
 
+dyn_clone::clone_trait_object!(IPV4AddrSource);
+
 /// An IPV4AddrSource that always returns the same thing
+#[derive(Clone)]
 pub struct StaticIPV4AddrSource {
     ip: Ipv4Addr,
 }
@@ -33,12 +37,14 @@ impl StaticIPV4AddrSource {
     }
 }
 
+#[derive(Clone)]
 struct IPV4Vote {
     ip: Ipv4Addr,
     votes: i32,
 }
 
 /// An IPV4Source that takes a certain number of "votes" from other nodes on the network to make its decision.
+#[derive(Clone)]
 pub struct IPV4Consensus {
     min_votes: usize,
     max_votes: usize,

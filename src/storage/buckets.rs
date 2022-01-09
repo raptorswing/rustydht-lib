@@ -9,6 +9,7 @@ pub trait Bucketable {
 }
 
 /// This data structure implements the bucket system described in [BEP0005](http://bittorrent.org/beps/bep_0005.html) (more or less).
+#[derive(Clone)]
 pub struct Buckets<T: Bucketable> {
     our_id: Id,
     buckets: Vec<Vec<T>>,

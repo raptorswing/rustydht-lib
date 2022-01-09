@@ -151,6 +151,10 @@ impl Id {
         }
         Ok(mutant)
     }
+
+    pub const ZERO: Self = Id {
+        bytes: [0; ID_SIZE],
+    };
 }
 
 impl std::fmt::Display for Id {

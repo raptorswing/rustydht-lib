@@ -15,6 +15,7 @@ repository = "https://github.com/raptorswing/rustydht-lib"
 [dependencies]
 anyhow = "1.0"
 crc = "^1.0.0"
+dyn-clone = "^1"
 futures = "0.3.13"
 hex = "0.4"
 log = "0.4"
