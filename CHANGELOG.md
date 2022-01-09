@@ -4,6 +4,7 @@
 * Add a `DHTBuilder` for more easily constructing DHT objects. Add a `DHTSettingsBuilder` for more easily constructing DHTSettings objects. Revise `DHT::new()` (this is a breaking change to the public API).
 * Remove `count_buckets` method from `NodeStorage` trait. This was an implementation detail of bucket-based storage leaking into the trait, which should be more generic. This is a breaking change to the public API.
 * Add documentation to `NodeStorage`, `NodeBucketStorage`, and `NodeWrapper`.
+* Update dependencies
 
 ## [v2.1.0] - 2022-01-04
 * Remove `timestamps` features from `simple_logger` in dev-dependencies. The time crate is intermittently failing to get local timezone offset and causing a crash while logging.
