@@ -13,24 +13,24 @@ repository = "https://github.com/raptorswing/rustydht-lib"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "^1"
-crc = "^1"
-dyn-clone = "^1"
+anyhow = "1.0.52"
+crc = "1.8.1"
+dyn-clone = "1.0.4"
 futures = "0.3.19"
-hex = "0.4"
-log = "0.4"
+hex = "0.4.3"
+log = "0.4.14"
 lru = "0.7.2"
 rand = "0.8.4"
-serde_bencode = "^0.2.3"
-serde = { version = "^1.0.0", features = ["derive"] }
-serde_bytes = "0.11"
-serde_derive = "^1.0.0"
-thiserror = "^1"
-tokio = { version = "1", features = ["rt","net", "time", "macros", "sync"] }
+serde_bencode = "0.2.3"
+serde = { version = "1.0.133", features = ["derive"] }
+serde_bytes = "0.11.5"
+serde_derive = "1.0.133"
+thiserror = "1.0.30"
+tokio = { version = "1.15.0", features = ["rt","net", "time", "macros", "sync"] }
 
 [dev-dependencies]
-clap = "^2"
+clap = "2.34.0"
 rand_chacha = "0.3.0"
-simple_logger = { version = "^1", default-features = false, features = ["colors"] }
-tokio = { version = "1", features = ["rt","net", "time", "macros", "sync", "signal"] }
-warp = "0.3"
+simple_logger = { version = "1.16.0", default-features = false, features = ["colors"] }
+tokio = { version = "1.15.0", features = ["rt","net", "time", "macros", "sync", "signal"] }
+warp = "0.3.2"
