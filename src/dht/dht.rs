@@ -57,13 +57,13 @@ pub struct DHT {
 impl DHT {
     /// Returns the current Id used by the DHT.
     pub fn get_id(&self) -> Id {
-        self.state.try_lock().unwrap().our_id
+        self.state.lock().unwrap().our_id
     }
 
     /// Returns a full dump of all the info hashes and peers in storage.
     /// Peers that haven't announced since the provided `newer_than` can be optionally filtered.
     pub fn get_info_hashes(&self, newer_than: Option<Instant>) -> Vec<(Id, Vec<PeerInfo>)> {
-        let state = self.state.try_lock().unwrap();
+        let state = self.state.lock().unwrap();
         let hashes = state.peer_storage.get_info_hashes();
         hashes
             .iter()
@@ -75,12 +75,12 @@ impl DHT {
 
     /// Returns information about all currently-verified DHT nodes that we're "connected" with.
     pub fn get_nodes(&self) -> Vec<NodeWrapper> {
-        self.state.try_lock().unwrap().buckets.get_all_verified()
+        self.state.lock().unwrap().buckets.get_all_verified()
     }
 
     /// Return a copy of the settings used by the DHT
     pub fn get_settings(&self) -> DHTSettings {
-        self.state.try_lock().unwrap().settings.clone()
+        self.state.lock().unwrap().settings.clone()
     }
 
     /// Creates a new DHT.
@@ -272,7 +272,7 @@ impl DHT {
             Duration::from_secs(60),
             Duration::from_secs(86400),
         );
-        let read_only = self.state.try_lock().unwrap().settings.read_only;
+        let read_only = self.state.lock().unwrap().settings.read_only;
         loop {
             match async {
                 let (msg, addr) = self.socket.recv_from().await?;
@@ -345,7 +345,7 @@ impl DHT {
         };
         if is_id_valid && !read_only {
             self.state
-                .try_lock()
+                .lock()
                 .unwrap()
                 .buckets
                 .add_or_update(Node::new(sender_id, remote_addr), false);
@@ -366,7 +366,7 @@ impl DHT {
 
                         // Build a ping reply
                         let reply = MessageBuilder::new_ping_response()
-                            .sender_id(self.state.try_lock().unwrap().our_id)
+                            .sender_id(self.state.lock().unwrap().our_id)
                             .transaction_id(msg.transaction_id.clone())
                             .requester_ip(addr)
                             .build()?;
@@ -378,7 +378,7 @@ impl DHT {
                     packets::RequestSpecific::GetPeersRequest(arguments) => {
                         self.common_request_handling(addr, &msg)?;
                         let reply = {
-                            let state = self.state.try_lock().unwrap();
+                            let state = self.state.lock().unwrap();
 
                             // First, see if we have any peers for their info_hash
                             let peers = {
@@ -427,7 +427,7 @@ impl DHT {
                     packets::RequestSpecific::FindNodeRequest(arguments) => {
                         self.common_request_handling(addr, &msg)?;
                         let reply = {
-                            let state = self.state.try_lock().unwrap();
+                            let state = self.state.lock().unwrap();
                             let nearest = state.buckets.get_nearest_nodes(
                                 &arguments.target,
                                 Some(&arguments.requester_id),
@@ -448,7 +448,7 @@ impl DHT {
                     packets::RequestSpecific::AnnouncePeerRequest(arguments) => {
                         self.common_request_handling(addr, &msg)?;
                         let reply = {
-                            let mut state = self.state.try_lock().unwrap();
+                            let mut state = self.state.lock().unwrap();
 
                             let is_token_valid = arguments.token
                                 == calculate_token(&addr, state.token_secret.clone())
@@ -492,7 +492,7 @@ impl DHT {
                     packets::RequestSpecific::SampleInfoHashesRequest(arguments) => {
                         self.common_request_handling(addr, &msg)?;
                         let reply = {
-                            let state = self.state.try_lock().unwrap();
+                            let state = self.state.lock().unwrap();
 
                             let nearest = state.buckets.get_nearest_nodes(
                                 &arguments.target,
@@ -582,17 +582,13 @@ impl DHT {
         shutdown: shutdown::ShutdownReceiver,
     ) -> Result<(), RustyDHTError> {
         loop {
-            let ping_check_interval_secs = self
-                .state
-                .try_lock()
-                .unwrap()
-                .settings
-                .ping_check_interval_secs;
+            let ping_check_interval_secs =
+                self.state.lock().unwrap().settings.ping_check_interval_secs;
             sleep(Duration::from_secs(ping_check_interval_secs)).await;
 
             // Package things that need state into a block so that Rust will not complain about MutexGuard kept past .await
             let reverify_interval_secs = {
-                let mut state = self.state.try_lock().unwrap();
+                let mut state = self.state.lock().unwrap();
                 let count = state.buckets.count();
                 debug!(target: "rustydht_lib::DHT",
                     "Pruning node buckets. Storage has {} unverified, {} verified",
@@ -670,15 +666,11 @@ impl DHT {
         shutdown: shutdown::ShutdownReceiver,
     ) -> Result<(), RustyDHTError> {
         loop {
-            let find_node_interval_secs = self
-                .state
-                .try_lock()
-                .unwrap()
-                .settings
-                .find_nodes_interval_secs;
+            let find_node_interval_secs =
+                self.state.lock().unwrap().settings.find_nodes_interval_secs;
             sleep(Duration::from_secs(find_node_interval_secs)).await;
 
-            let (count_unverified, count_verified) = self.state.try_lock().unwrap().buckets.count();
+            let (count_unverified, count_verified) = self.state.lock().unwrap().buckets.count();
 
             // If we don't know anybody, force a router ping.
             // This is helpful if we've been asleep for a while and lost all peers
@@ -688,7 +680,7 @@ impl DHT {
 
             // Package things that need state into this block to avoid issues with MutexGuard kept over .await
             let (nearest_nodes, id_near_us) = {
-                let state = self.state.try_lock().unwrap();
+                let state = self.state.lock().unwrap();
                 if count_unverified > state.settings.find_nodes_skip_count {
                     debug!(target: "rustydht_lib::DHT", "Skipping find_node as we already have enough unverified");
                     continue;
@@ -719,7 +711,7 @@ impl DHT {
         loop {
             sleep(Duration::from_secs(10)).await;
 
-            let mut state = self.state.try_lock().unwrap();
+            let mut state = self.state.lock().unwrap();
             state.ip4_source.decay();
 
             if let Some(ip) = state.ip4_source.get_best_ipv4() {
@@ -746,7 +738,7 @@ impl DHT {
         loop {
             let router_ping_interval_secs = self
                 .state
-                .try_lock()
+                .lock()
                 .unwrap()
                 .settings
                 .router_ping_interval_secs;
@@ -777,7 +769,7 @@ impl DHT {
             shutdown,
             async move {
                 let req = {
-                    let state = state.try_lock().unwrap();
+                    let state = state.lock().unwrap();
                     MessageBuilder::new_ping_request()
                         .sender_id(state.our_id)
                         .read_only(state.settings.read_only)
@@ -840,7 +832,7 @@ impl DHT {
                         // Node is fit to be in our routing buckets and vote on our IPv4 only
                         // if its id is valid for its IP.
                         if id_is_valid {
-                            let mut state = state.try_lock().unwrap();
+                            let mut state = state.lock().unwrap();
                             DHT::ip4_vote_helper(&mut state, &target, &reply);
                             state
                                 .buckets
@@ -852,7 +844,7 @@ impl DHT {
                             // Add the nodes we got back as "seen" (even though we haven't necessarily seen them directly yet).
                             // They will be pinged later in an attempt to verify them.
                             packets::ResponseSpecific::FindNodeResponse(args) => {
-                                let mut state = state.try_lock().unwrap();
+                                let mut state = state.lock().unwrap();
                                 for node in &args.nodes {
                                     if node.id.is_valid_for_ip(&node.address.ip()) {
                                         state.buckets.add_or_update(node.clone(), false);
@@ -912,7 +904,7 @@ impl DHT {
         shutdown: shutdown::ShutdownReceiver,
     ) -> Result<(), RustyDHTError> {
         let mut futures = futures::stream::FuturesUnordered::new();
-        let routers = self.state.try_lock().unwrap().settings.routers.clone();
+        let routers = self.state.lock().unwrap().settings.routers.clone();
         for hostname in routers {
             let shutdown_clone = shutdown.clone();
             futures.push(self.ping_router(shutdown_clone, hostname));
@@ -924,7 +916,7 @@ impl DHT {
     }
 
     fn rotate_token_secrets(&self) {
-        let mut state = self.state.try_lock().unwrap();
+        let mut state = self.state.lock().unwrap();
         let new_token_secret = make_token_secret(state.settings.token_secret_size);
 
         state.old_token_secret = state.token_secret.clone();
@@ -950,7 +942,7 @@ impl DHT {
             shutdown,
             async move {
                 let req = {
-                    let state = state.try_lock().unwrap();
+                    let state = state.lock().unwrap();
                     MessageBuilder::new_find_node_request()
                         .sender_id(state.our_id)
                         .read_only(state.settings.read_only)
@@ -1331,7 +1323,7 @@ mod test {
         );
 
         receiver.recv().await;
-        let (unverified, verified) = dht2.state.try_lock().unwrap().buckets.count();
+        let (unverified, verified) = dht2.state.lock().unwrap().buckets.count();
 
         // Must drop dht2 as it contains a ShutdownReceiver channel which will block shutdown
         drop(dht2);
@@ -1356,21 +1348,21 @@ mod test {
             .unwrap();
 
         assert_eq!(
-            dht.state.try_lock().unwrap().token_secret.len(),
+            dht.state.lock().unwrap().token_secret.len(),
             DHTSettings::default().token_secret_size
         );
 
         dht.rotate_token_secrets();
         assert_eq!(
-            dht.state.try_lock().unwrap().old_token_secret.len(),
+            dht.state.lock().unwrap().old_token_secret.len(),
             DHTSettings::default().token_secret_size
         );
         assert_eq!(
-            dht.state.try_lock().unwrap().token_secret.len(),
+            dht.state.lock().unwrap().token_secret.len(),
             DHTSettings::default().token_secret_size
         );
 
-        let state = dht.state.try_lock().unwrap();
+        let state = dht.state.lock().unwrap();
         assert_ne!(state.old_token_secret, state.token_secret);
     }
 
