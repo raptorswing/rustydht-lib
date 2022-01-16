@@ -10,7 +10,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use warp::Filter;
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn main() {
     SimpleLogger::new()
         .with_level(LevelFilter::Error)
