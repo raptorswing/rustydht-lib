@@ -56,10 +56,8 @@ impl OutboundRequestStorage {
                             &request_info.packet.message_type
                         {
                             // Does the response type match the request type?
-                            if crate::packets::response_matches_request(
-                                res_specific,
-                                req_specific,
-                            ) {
+                            if crate::packets::response_matches_request(res_specific, req_specific)
+                            {
                                 return Some(request_info);
                             }
                         }
@@ -94,9 +92,8 @@ impl OutboundRequestStorage {
 
             Some(time) => {
                 let len_before = self.requests.len();
-                self.requests.retain(|_, v| -> bool {
-                    v.created_at >= time
-                });
+                self.requests
+                    .retain(|_, v| -> bool { v.created_at >= time });
                 let len_after = self.requests.len();
                 debug!(target: "rustydht_lib::OutboundRequestStorage", "Pruned {} request records", len_before - len_after);
             }

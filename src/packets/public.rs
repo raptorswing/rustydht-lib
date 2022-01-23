@@ -203,17 +203,19 @@ impl Message {
         internal::DHTMessage {
             transaction_id: self.transaction_id,
             version: self.version,
-            ip: self.requester_ip.map(|sockaddr| sockaddr_to_bytes(&sockaddr)),
-            read_only: self.read_only.map(|read_only| if read_only { 1 } else { 0 }),
+            ip: self
+                .requester_ip
+                .map(|sockaddr| sockaddr_to_bytes(&sockaddr)),
+            read_only: self
+                .read_only
+                .map(|read_only| if read_only { 1 } else { 0 }),
             variant: match self.message_type {
                 MessageType::Request(req) => internal::DHTMessageVariant::DHTRequest(match req {
-                    RequestSpecific::PingRequest(ping_args) => {
-                        internal::DHTRequestSpecific::Ping {
-                            arguments: internal::DHTPingArguments {
-                                id: ping_args.requester_id.to_vec(),
-                            },
-                        }
-                    }
+                    RequestSpecific::PingRequest(ping_args) => internal::DHTRequestSpecific::Ping {
+                        arguments: internal::DHTPingArguments {
+                            id: ping_args.requester_id.to_vec(),
+                        },
+                    },
 
                     RequestSpecific::FindNodeRequest(find_node_args) => {
                         internal::DHTRequestSpecific::FindNode {
@@ -429,37 +431,37 @@ impl Message {
                             })
                         }
 
-                        internal::DHTResponseSpecific::SampleInfoHashes {
-                            arguments,
-                        } => ResponseSpecific::SampleInfoHashesResponse(
-                            SampleInfoHashesResponseArguments {
-                                responder_id: Id::from_bytes(&arguments.id)?,
-                                interval: Duration::from_secs(arguments.interval as u64),
-                                num: arguments.num,
-                                nodes: bytes_to_nodes4(&arguments.nodes)?,
-                                samples: {
-                                    if arguments.samples.len() % ID_SIZE != 0 {
-                                        return Err(anyhow!(
-                                            "Wrong sample length {} not a multiple of {}",
-                                            arguments.samples.len(),
-                                            ID_SIZE
-                                        )
-                                        .into());
-                                    }
-                                    let num_expected = arguments.samples.len() / ID_SIZE;
-                                    let mut to_ret = Vec::with_capacity(num_expected);
+                        internal::DHTResponseSpecific::SampleInfoHashes { arguments } => {
+                            ResponseSpecific::SampleInfoHashesResponse(
+                                SampleInfoHashesResponseArguments {
+                                    responder_id: Id::from_bytes(&arguments.id)?,
+                                    interval: Duration::from_secs(arguments.interval as u64),
+                                    num: arguments.num,
+                                    nodes: bytes_to_nodes4(&arguments.nodes)?,
+                                    samples: {
+                                        if arguments.samples.len() % ID_SIZE != 0 {
+                                            return Err(anyhow!(
+                                                "Wrong sample length {} not a multiple of {}",
+                                                arguments.samples.len(),
+                                                ID_SIZE
+                                            )
+                                            .into());
+                                        }
+                                        let num_expected = arguments.samples.len() / ID_SIZE;
+                                        let mut to_ret = Vec::with_capacity(num_expected);
 
-                                    for i in 0..num_expected {
-                                        let i = i * ID_SIZE;
-                                        let id =
-                                            Id::from_bytes(&arguments.samples[i..i + ID_SIZE])?;
-                                        to_ret.push(id);
-                                    }
+                                        for i in 0..num_expected {
+                                            let i = i * ID_SIZE;
+                                            let id =
+                                                Id::from_bytes(&arguments.samples[i..i + ID_SIZE])?;
+                                            to_ret.push(id);
+                                        }
 
-                                    to_ret
+                                        to_ret
+                                    },
                                 },
-                            },
-                        ),
+                            )
+                        }
                     })
                 }
 

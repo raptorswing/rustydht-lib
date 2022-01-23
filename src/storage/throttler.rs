@@ -83,7 +83,9 @@ impl<const NUM_RECORDS: usize> Throttler<NUM_RECORDS> {
 
             // Keep track of the saddest/lamest record as we go
             if let Some(lame) = &lamest {
-                if record.packets < lame.packets || (record.packets == lame.packets && record.expiration < lame.expiration) {
+                if record.packets < lame.packets
+                    || (record.packets == lame.packets && record.expiration < lame.expiration)
+                {
                     lamest = Some(record);
                 }
             } else {

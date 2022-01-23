@@ -178,19 +178,11 @@ impl NodeStorage for NodeBucketStorage {
     }
 
     fn get_all_unverified(&self) -> Vec<NodeWrapper> {
-        self.unverified
-            .values()
-            .iter()
-            .copied().cloned()
-            .collect()
+        self.unverified.values().iter().copied().cloned().collect()
     }
 
     fn get_all_verified(&self) -> Vec<NodeWrapper> {
-        self.verified
-            .values()
-            .iter()
-            .copied().cloned()
-            .collect()
+        self.verified.values().iter().copied().cloned().collect()
     }
 
     fn get_nearest_nodes(&self, id: &Id, exclude: Option<&Id>) -> Vec<Node> {

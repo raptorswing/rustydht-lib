@@ -180,7 +180,7 @@ pub async fn find_node(
     })
     .await;
 
-    if let Err(timeout) = find_node_result  {
+    if let Err(timeout) = find_node_result {
         debug!(target: "rustydht_lib::operations::find_node", "Timed out after {:?}", timeout);
     }
 
@@ -372,10 +372,7 @@ pub struct GetPeersResponder {
 
 impl GetPeersResponder {
     pub fn new(node: Node, token: Vec<u8>) -> GetPeersResponder {
-        GetPeersResponder {
-            node,
-            token,
-        }
+        GetPeersResponder { node, token }
     }
 
     pub fn node(self) -> Node {

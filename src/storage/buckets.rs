@@ -90,7 +90,8 @@ impl<T: Bucketable> Buckets<T> {
         let mut all: Vec<&T> = self
             .values()
             .iter()
-            .filter(|item| exclude.is_none() || *exclude.unwrap() != item.get_id()).copied()
+            .filter(|item| exclude.is_none() || *exclude.unwrap() != item.get_id())
+            .copied()
             .collect();
 
         all.sort_unstable_by(|a, b| {
@@ -207,10 +208,7 @@ mod tests {
                 Instant::now()
             };
 
-            TestWrapper {
-                id,
-                first_seen: fs,
-            }
+            TestWrapper { id, first_seen: fs }
         }
     }
 

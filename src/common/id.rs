@@ -126,7 +126,7 @@ impl Id {
     /// Example: `let distance_between_nodes = id.xor(other_id);`
     pub fn xor(&self, other: &Id) -> Id {
         let mut bytes: [u8; ID_SIZE] = [0; ID_SIZE];
-        for (i, item ) in  bytes.iter_mut().enumerate().take(ID_SIZE) {
+        for (i, item) in bytes.iter_mut().enumerate().take(ID_SIZE) {
             *item = self.bytes[i] ^ other.bytes[i];
         }
 
@@ -172,9 +172,9 @@ impl PartialOrd for Id {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         for i in 0..self.bytes.len() {
             match self.bytes[i].cmp(&other.bytes[i]) {
-                 std::cmp::Ordering::Less =>  return Some(std::cmp::Ordering::Less),
-                 std::cmp::Ordering::Greater => return Some(std::cmp::Ordering::Greater),
-                 _ => continue,
+                std::cmp::Ordering::Less => return Some(std::cmp::Ordering::Less),
+                std::cmp::Ordering::Greater => return Some(std::cmp::Ordering::Greater),
+                _ => continue,
             };
         }
 
@@ -237,7 +237,7 @@ impl IdPrefixMagic {
 
 impl PartialEq for IdPrefixMagic {
     fn eq(&self, other: &Self) -> bool {
-       self.prefix[0] == other.prefix[0]
+        self.prefix[0] == other.prefix[0]
             && self.prefix[1] == other.prefix[1]
             && self.prefix[2] & 0xf8 == other.prefix[2] & 0xf8
             && self.suffix == other.suffix
@@ -308,17 +308,26 @@ mod tests {
         let h1 = Id::from_hex("0000000000000000000000000000000000000001").unwrap();
         let h2 = Id::from_hex("0000000000000000000000000000000000000001").unwrap();
         let h3 = h1.xor(&h2);
-        assert_eq!(h3, Id::from_hex("0000000000000000000000000000000000000000").unwrap());
+        assert_eq!(
+            h3,
+            Id::from_hex("0000000000000000000000000000000000000000").unwrap()
+        );
 
         let h1 = Id::from_hex("1010101010101010101010101010101010101010").unwrap();
         let h2 = Id::from_hex("0101010101010101010101010101010101010101").unwrap();
         let h3 = h1.xor(&h2);
-        assert_eq!(h3, Id::from_hex("1111111111111111111111111111111111111111").unwrap());
+        assert_eq!(
+            h3,
+            Id::from_hex("1111111111111111111111111111111111111111").unwrap()
+        );
 
         let h1 = Id::from_hex("fefefefefefefefefefefefefefefefefefefefe").unwrap();
         let h2 = Id::from_hex("0505050505050505050505050505050505050505").unwrap();
         let h3 = h1.xor(&h2);
-        assert_eq!(h3, Id::from_hex("fbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfb").unwrap());
+        assert_eq!(
+            h3,
+            Id::from_hex("fbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfb").unwrap()
+        );
     }
 
     #[test]

@@ -104,9 +104,7 @@ impl IPV4AddrSource for IPV4Consensus {
         }
 
         if do_sort {
-            self.votes.sort_by(|a, b| {
-                b.votes.cmp(&a.votes)
-            });
+            self.votes.sort_by(|a, b| b.votes.cmp(&a.votes));
         } else {
             self.votes.push(IPV4Vote {
                 ip: proposed_addr,
@@ -121,9 +119,7 @@ impl IPV4AddrSource for IPV4Consensus {
         }
 
         // Optimize this if we care (hint: we probably don't)
-        self.votes.retain(|a| {
-            a.votes > 0
-        })
+        self.votes.retain(|a| a.votes > 0)
     }
 }
 

@@ -32,8 +32,7 @@ impl DHTMessage {
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, RustyDHTError> {
-        serde_bencode::to_bytes(self)
-            .map_err(RustyDHTError::PacketSerializationError)
+        serde_bencode::to_bytes(self).map_err(RustyDHTError::PacketSerializationError)
     }
 }
 
@@ -427,14 +426,12 @@ mod tests {
             transaction_id: vec![0x61, 0x61],
             ip: None,
             version: None,
-            variant: DHTMessageVariant::DHTRequest(
-                DHTRequestSpecific::SampleInfoHashes {
-                    arguments: DHTSampleInfoHashesRequestArguments {
-                        id: hex::decode("0000000000000000000000000000000000000000").unwrap(),
-                        target: hex::decode("bad6487806506bd534e78a8e375e3f59f7bb5ee0").unwrap(),
-                    },
+            variant: DHTMessageVariant::DHTRequest(DHTRequestSpecific::SampleInfoHashes {
+                arguments: DHTSampleInfoHashesRequestArguments {
+                    id: hex::decode("0000000000000000000000000000000000000000").unwrap(),
+                    target: hex::decode("bad6487806506bd534e78a8e375e3f59f7bb5ee0").unwrap(),
                 },
-            ),
+            }),
             read_only: None,
         };
 

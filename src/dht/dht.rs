@@ -393,7 +393,7 @@ impl DHT {
                             };
                             let token = calculate_token(&addr, state.token_secret.clone());
 
-                             match peers.len() {
+                            match peers.len() {
                                 0 => {
                                     let nearest = state.buckets.get_nearest_nodes(
                                         &arguments.info_hash,
@@ -968,9 +968,9 @@ impl DHT {
     fn ip4_vote_helper(state: &mut DHTState, addr: &SocketAddr, msg: &packets::Message) {
         if let IpAddr::V4(their_ip) = addr.ip() {
             if let Some(SocketAddr::V4(they_claim_our_sockaddr)) = &msg.requester_ip {
-                    state
-                        .ip4_source
-                        .add_vote(their_ip, *they_claim_our_sockaddr.ip());
+                state
+                    .ip4_source
+                    .add_vote(their_ip, *they_claim_our_sockaddr.ip());
             }
         }
     }
