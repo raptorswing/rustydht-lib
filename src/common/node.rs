@@ -13,8 +13,8 @@ impl Node {
     /// Creates a new Node from an id and socket address.
     pub fn new(id: Id, address: SocketAddr) -> Node {
         Node {
-            id: id,
-            address: address,
+            id,
+            address,
         }
     }
 }

@@ -69,8 +69,8 @@ pub struct IPV4Consensus {
 impl IPV4Consensus {
     pub fn new(min_votes: usize, max_votes: usize) -> IPV4Consensus {
         IPV4Consensus {
-            min_votes: min_votes,
-            max_votes: max_votes,
+            min_votes,
+            max_votes,
             votes: Vec::new(),
         }
     }
@@ -105,7 +105,7 @@ impl IPV4AddrSource for IPV4Consensus {
 
         if do_sort {
             self.votes.sort_by(|a, b| {
-                return b.votes.cmp(&a.votes);
+                b.votes.cmp(&a.votes)
             });
         } else {
             self.votes.push(IPV4Vote {
@@ -122,7 +122,7 @@ impl IPV4AddrSource for IPV4Consensus {
 
         // Optimize this if we care (hint: we probably don't)
         self.votes.retain(|a| {
-            return a.votes > 0;
+            a.votes > 0
         })
     }
 }

@@ -126,7 +126,7 @@ impl MessageBuilder {
 
     fn new(message_type: BuilderMessageType) -> MessageBuilder {
         MessageBuilder {
-            message_type: message_type,
+            message_type,
             transaction_id: None,
             version: None,
             requester_ip: None,
@@ -405,10 +405,7 @@ impl MessageBuilder {
                 requester_id: required_or_error!(self, sender_id),
                 info_hash: required_or_error!(self, target),
                 token: required_or_error!(self, token),
-                port: match self.port {
-                    Some(port) => port,
-                    None => 0,
-                },
+                port: self.port.unwrap_or(0),
 
                 implied_port: match self.implied_port {
                     Some(implied_port) => {
@@ -515,7 +512,7 @@ mod test {
         let our_id = Id::from_hex("0000000000000000000011111111111111111111").unwrap();
         let b = MessageBuilder::new_ping_request().sender_id(our_id).build();
         assert!(b.is_ok());
-        assert!(b.unwrap().transaction_id.len() > 0);
+        assert!(!b.unwrap().transaction_id.is_empty());
     }
 
     #[test]
@@ -599,7 +596,7 @@ mod test {
                 .build()
                 .expect("Failed to build message"),
             packets::Message {
-                transaction_id: transaction_id,
+                transaction_id,
                 version: None,
                 requester_ip: None,
                 message_type: packets::MessageType::Request(packets::RequestSpecific::PingRequest(
@@ -623,7 +620,7 @@ mod test {
                 .build()
                 .expect("Failed to build message"),
             packets::Message {
-                transaction_id: transaction_id,
+                transaction_id,
                 version: None,
                 requester_ip: None,
                 message_type: packets::MessageType::Response(
@@ -645,17 +642,17 @@ mod test {
             MessageBuilder::new_find_node_request()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
-                .target(target.clone())
+                .target(target)
                 .build()
                 .expect("Failed to build message"),
             packets::Message {
-                transaction_id: transaction_id,
+                transaction_id,
                 version: None,
                 requester_ip: None,
                 message_type: packets::MessageType::Request(
                     packets::RequestSpecific::FindNodeRequest(packets::FindNodeRequestArguments {
                         requester_id: our_id,
-                        target: target
+                        target,
                     })
                 ),
                 read_only: None,
@@ -667,7 +664,7 @@ mod test {
     fn test_find_node_response() {
         let our_id = Id::from_hex("0000000000000000000011111111111111111111").unwrap();
         let transaction_id = vec![0, 1, 2, 3];
-        let nodes = vec![Node::new(our_id.clone(), "1.2.3.4:53".parse().unwrap())];
+        let nodes = vec![Node::new(our_id, "1.2.3.4:53".parse().unwrap())];
         assert_eq!(
             MessageBuilder::new_find_node_response()
                 .sender_id(our_id)
@@ -676,14 +673,14 @@ mod test {
                 .build()
                 .expect("Failed to build message"),
             packets::Message {
-                transaction_id: transaction_id,
+                transaction_id,
                 version: None,
                 requester_ip: None,
                 message_type: packets::MessageType::Response(
                     packets::ResponseSpecific::FindNodeResponse(
                         packets::FindNodeResponseArguments {
                             responder_id: our_id,
-                            nodes: nodes
+                            nodes,
                         }
                     )
                 ),
@@ -701,11 +698,11 @@ mod test {
             MessageBuilder::new_get_peers_request()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
-                .target(target.clone())
+                .target(target)
                 .build()
                 .expect("Failed to build message"),
             packets::Message {
-                transaction_id: transaction_id,
+                transaction_id,
                 version: None,
                 requester_ip: None,
                 message_type: packets::MessageType::Request(
@@ -723,7 +720,7 @@ mod test {
     fn test_get_peers_response_nodes() {
         let our_id = Id::from_hex("0000000000000000000011111111111111111111").unwrap();
         let transaction_id = vec![0, 1, 2, 3];
-        let nodes = vec![Node::new(our_id.clone(), "1.2.3.4:53".parse().unwrap())];
+        let nodes = vec![Node::new(our_id, "1.2.3.4:53".parse().unwrap())];
         let token = vec![45, 56];
         assert_eq!(
             MessageBuilder::new_get_peers_response()
@@ -734,7 +731,7 @@ mod test {
                 .build()
                 .expect("Failed to build message"),
             packets::Message {
-                transaction_id: transaction_id,
+                transaction_id,
                 version: None,
                 requester_ip: None,
                 message_type: packets::MessageType::Response(
@@ -742,7 +739,7 @@ mod test {
                         packets::GetPeersResponseArguments {
                             responder_id: our_id,
                             values: packets::GetPeersResponseValues::Nodes(nodes),
-                            token: token
+                            token
                         }
                     )
                 ),
@@ -766,7 +763,7 @@ mod test {
                 .build()
                 .expect("Failed to build message"),
             packets::Message {
-                transaction_id: transaction_id,
+                transaction_id,
                 version: None,
                 requester_ip: None,
                 message_type: packets::MessageType::Response(
@@ -774,7 +771,7 @@ mod test {
                         packets::GetPeersResponseArguments {
                             responder_id: our_id,
                             values: packets::GetPeersResponseValues::Peers(peers),
-                            token: token
+                            token
                         }
                     )
                 ),
@@ -787,7 +784,7 @@ mod test {
     fn test_get_peers_response_peers_precedent() {
         let our_id = Id::from_hex("0000000000000000000011111111111111111111").unwrap();
         let transaction_id = vec![0, 1, 2, 3];
-        let nodes = vec![Node::new(our_id.clone(), "1.2.3.4:53".parse().unwrap())];
+        let nodes = vec![Node::new(our_id, "1.2.3.4:53".parse().unwrap())];
         let peers = vec!["1.2.3.4:53".parse().unwrap()];
         let token = vec![45, 56];
         assert_eq!(
@@ -800,7 +797,7 @@ mod test {
                 .build()
                 .expect("Failed to build message"),
             packets::Message {
-                transaction_id: transaction_id,
+                transaction_id,
                 version: None,
                 requester_ip: None,
                 message_type: packets::MessageType::Response(
@@ -808,7 +805,7 @@ mod test {
                         packets::GetPeersResponseArguments {
                             responder_id: our_id,
                             values: packets::GetPeersResponseValues::Peers(peers),
-                            token: token
+                            token
                         }
                     )
                 ),
@@ -827,13 +824,13 @@ mod test {
             MessageBuilder::new_announce_peer_request()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
-                .target(target.clone())
+                .target(target)
                 .port(5050)
                 .token(token.clone())
                 .build()
                 .expect("Failed to build message"),
             packets::Message {
-                transaction_id: transaction_id,
+                transaction_id,
                 version: None,
                 requester_ip: None,
                 message_type: packets::MessageType::Request(
@@ -843,7 +840,7 @@ mod test {
                             info_hash: target,
                             port: 5050,
                             implied_port: None,
-                            token: token
+                            token
                         }
                     )
                 ),
@@ -862,12 +859,12 @@ mod test {
             MessageBuilder::new_announce_peer_request()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
-                .target(target.clone())
+                .target(target)
                 .token(token.clone())
                 .build()
                 .expect("Failed to build message"),
             packets::Message {
-                transaction_id: transaction_id,
+                transaction_id,
                 version: None,
                 requester_ip: None,
                 message_type: packets::MessageType::Request(
@@ -877,7 +874,7 @@ mod test {
                             info_hash: target,
                             port: 0,
                             implied_port: Some(true),
-                            token: token
+                            token
                         }
                     )
                 ),
@@ -895,9 +892,9 @@ mod test {
         assert!(matches!(
             MessageBuilder::new_announce_peer_request()
                 .sender_id(our_id)
-                .transaction_id(transaction_id.clone())
-                .target(target.clone())
-                .token(token.clone())
+                .transaction_id(transaction_id)
+                .target(target)
+                .token(token)
                 .implied_port(false)
                 .build()
                 .unwrap_err(),
@@ -916,7 +913,7 @@ mod test {
                 .build()
                 .expect("Failed to build message"),
             packets::Message {
-                transaction_id: transaction_id,
+                transaction_id,
                 version: None,
                 requester_ip: None,
                 message_type: packets::MessageType::Response(
@@ -938,18 +935,18 @@ mod test {
             MessageBuilder::new_sample_infohashes_request()
                 .sender_id(our_id)
                 .transaction_id(transaction_id.clone())
-                .target(target.clone())
+                .target(target)
                 .build()
                 .expect("Failed to build message"),
             packets::Message {
-                transaction_id: transaction_id,
+                transaction_id,
                 version: None,
                 requester_ip: None,
                 message_type: packets::MessageType::Request(
                     packets::RequestSpecific::SampleInfoHashesRequest(
                         packets::SampleInfoHashesRequestArguments {
                             requester_id: our_id,
-                            target: target
+                            target
                         }
                     )
                 ),
@@ -962,7 +959,7 @@ mod test {
     fn test_sample_infohashes_response() {
         let our_id = Id::from_hex("0000000000000000000011111111111111111111").unwrap();
         let transaction_id = vec![0, 1, 2, 3];
-        let nodes = vec![Node::new(our_id.clone(), "1.2.3.4:53".parse().unwrap())];
+        let nodes = vec![Node::new(our_id, "1.2.3.4:53".parse().unwrap())];
         let samples = vec![Id::from_hex("2222222222222222222233333333333333333333").unwrap()];
         assert_eq!(
             MessageBuilder::new_sample_infohashes_response()
@@ -975,7 +972,7 @@ mod test {
                 .build()
                 .expect("Failed to build message"),
             packets::Message {
-                transaction_id: transaction_id,
+                transaction_id,
                 version: None,
                 requester_ip: None,
                 message_type: packets::MessageType::Response(
@@ -984,8 +981,8 @@ mod test {
                             responder_id: our_id,
                             interval: Duration::from_secs(30),
                             num: 50,
-                            nodes: nodes,
-                            samples: samples
+                            nodes,
+                            samples
                         }
                     )
                 ),
@@ -1008,11 +1005,11 @@ mod test {
                 .build()
                 .unwrap(),
             packets::Message {
-                transaction_id: transaction_id,
+                transaction_id,
                 version: None,
                 requester_ip: None,
                 message_type: packets::MessageType::Error(packets::ErrorSpecific {
-                    code: code,
+                    code,
                     description: description.to_string()
                 }),
                 read_only: None,

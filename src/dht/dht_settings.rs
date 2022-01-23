@@ -101,7 +101,13 @@ impl DHTSettings {
     }
 }
 
-#[derive(Clone)]
+impl Default for DHTSettings {
+    fn default() -> Self {
+        Self::default()
+    }
+}
+
+#[derive(Clone, Default)]
 /// Builder for DHTSettings
 pub struct DHTSettingsBuilder {
     settings: DHTSettings,
@@ -118,9 +124,7 @@ macro_rules! make_builder_method {
 
 impl DHTSettingsBuilder {
     pub fn new() -> DHTSettingsBuilder {
-        DHTSettingsBuilder {
-            settings: DHTSettings::default(),
-        }
+        Self::default()
     }
 
     make_builder_method!(token_secret_size, usize);

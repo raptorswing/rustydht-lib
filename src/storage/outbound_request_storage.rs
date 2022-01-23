@@ -8,15 +8,14 @@ use std::time::{Duration, Instant};
 use log::debug;
 use tokio::sync::mpsc;
 
+#[derive(Default)]
 pub struct OutboundRequestStorage {
     requests: std::collections::HashMap<TransactionId, RequestInfo>,
 }
 
 impl OutboundRequestStorage {
     pub fn new() -> OutboundRequestStorage {
-        OutboundRequestStorage {
-            requests: std::collections::HashMap::new(),
-        }
+        Self::default()
     }
 
     pub fn add_request(&mut self, info: RequestInfo) {
@@ -30,7 +29,7 @@ impl OutboundRequestStorage {
         T: Into<TransactionId>,
         T: Clone,
     {
-        return self.requests.contains_key(&tid.clone().into());
+        self.requests.contains_key(&tid.clone().into())
     }
 
     pub fn get_matching_request_info(
@@ -58,8 +57,8 @@ impl OutboundRequestStorage {
                         {
                             // Does the response type match the request type?
                             if crate::packets::response_matches_request(
-                                &res_specific,
-                                &req_specific,
+                                res_specific,
+                                req_specific,
                             ) {
                                 return Some(request_info);
                             }
@@ -77,7 +76,7 @@ impl OutboundRequestStorage {
         response: &Message,
         src_addr: SocketAddr,
     ) -> Option<RequestInfo> {
-        if let Some(_) = self.get_matching_request_info(response, src_addr) {
+        if self.get_matching_request_info(response, src_addr).is_some() {
             let tid = response.transaction_id.clone().into();
             return self.requests.remove(&tid);
         }
@@ -96,7 +95,7 @@ impl OutboundRequestStorage {
             Some(time) => {
                 let len_before = self.requests.len();
                 self.requests.retain(|_, v| -> bool {
-                    return v.created_at >= time;
+                    v.created_at >= time
                 });
                 let len_after = self.requests.len();
                 debug!(target: "rustydht_lib::OutboundRequestStorage", "Pruned {} request records", len_before - len_after);
@@ -105,7 +104,11 @@ impl OutboundRequestStorage {
     }
 
     pub fn len(&self) -> usize {
-        return self.requests.len();
+        self.requests.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.requests.is_empty()
     }
 }
 
@@ -126,11 +129,11 @@ impl RequestInfo {
         response_channel: Option<mpsc::Sender<Message>>,
     ) -> RequestInfo {
         RequestInfo {
-            addr: addr,
-            id: id,
-            packet: packet,
+            addr,
+            id,
+            packet,
             created_at: Instant::now(),
-            response_channel: response_channel,
+            response_channel,
         }
     }
 }

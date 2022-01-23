@@ -47,8 +47,8 @@ impl DHTSocket {
         );
         DHTSocket {
             recv_from_rx: Arc::new(tokio::sync::Mutex::new(recv_from_rx)),
-            send_to_tx: send_to_tx,
-            request_storage: request_storage,
+            send_to_tx,
+            request_storage,
         }
     }
 
@@ -172,7 +172,7 @@ impl DHTSocket {
         let (num_bytes, sender) = socket
             .recv_from(&mut buf)
             .await
-            .map_err(|e| RustyDHTError::SocketRecvError(e.into()))?;
+            .map_err(RustyDHTError::SocketRecvError)?;
         trace!(target:"rustydht_lib::DHTSocket", "Receiving {} bytes from {}", num_bytes, sender);
         let message = packets::Message::from_bytes(&buf[..num_bytes])?;
 
@@ -187,16 +187,13 @@ impl DHTSocket {
 
                 match request_info {
                     Some(request_info) => {
-                        match request_info.response_channel {
-                            Some(response_channel) => {
-                                if let Err(e) = response_channel.send(message.clone()).await {
-                                    let message = e.0;
-                                    warn!(target: "rustydht_lib::DHTSocket", "Got response, but sending code abandoned the channel receiver. So sad. Response: {:?}. Sender: {:?}", message, sender);
-                                }
-                            }
-                            None => { /*It's fine if there's no channel - just means that the sender didn't care about getting a response*/
+                        if let Some(response_channel) = request_info.response_channel {
+                            if let Err(e) = response_channel.send(message.clone()).await {
+                                let message = e.0;
+                                warn!(target: "rustydht_lib::DHTSocket", "Got response, but sending code abandoned the channel receiver. So sad. Response: {:?}. Sender: {:?}", message, sender);
                             }
                         }
+                        // It's fine if there's no channel - just means that the sender didn't care about getting a response
 
                         // Since the response is to a valid request, send it to the general recv channel
                         recv_from_tx

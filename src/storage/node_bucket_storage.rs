@@ -181,8 +181,7 @@ impl NodeStorage for NodeBucketStorage {
         self.unverified
             .values()
             .iter()
-            .copied()
-            .map(|nw| nw.clone())
+            .copied().cloned()
             .collect()
     }
 
@@ -190,8 +189,7 @@ impl NodeStorage for NodeBucketStorage {
         self.verified
             .values()
             .iter()
-            .copied()
-            .map(|nw| nw.clone())
+            .copied().cloned()
             .collect()
     }
 
@@ -211,7 +209,7 @@ impl NodeStorage for NodeBucketStorage {
                         return last_verified >= time;
                     }
                     trace!(target: "rustydht_lib::NodeBucketStorage", "Verified {:?} hasn't verified recently. Removing.", nw.node);
-                    return false;
+                    false
                 });
                 self.unverified.retain(|nw| {
                     if let Some(last_verified) = nw.last_verified {
@@ -223,7 +221,7 @@ impl NodeStorage for NodeBucketStorage {
                         return true;
                     }
                     trace!(target: "rustydht_lib::NodeBucketStorage", "Unverified {:?} is dead. Removing", nw.node);
-                    return false;
+                    false
                 });
             }
         }
