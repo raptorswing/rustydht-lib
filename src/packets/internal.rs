@@ -101,7 +101,7 @@ pub enum DHTResponseSpecific {
         arguments: DHTFindNodeResponseArguments,
     },
 
-    PingResponse {
+    Ping {
         #[serde(rename = "r")]
         arguments: DHTPingResponseArguments,
     },
@@ -251,7 +251,7 @@ mod tests {
             transaction_id: vec![0xb5, 0x1b],
             ip: Some(hex::decode("48a8858f2014").unwrap()),
             version: Some(hex::decode("5554b3ba").unwrap()),
-            variant: DHTMessageVariant::DHTResponse(DHTResponseSpecific::PingResponse {
+            variant: DHTMessageVariant::DHTResponse(DHTResponseSpecific::Ping {
                 arguments: DHTPingResponseArguments {
                     id: hex::decode("70f22fcfdc27e4ff28f0c00a6a3de0d6c4361ccd").unwrap(),
                 },
@@ -406,7 +406,7 @@ mod tests {
             transaction_id: hex::decode("1d4c0100").unwrap(),
             ip: Some(hex::decode("725c2f242e87").unwrap()),
             version: None,
-            variant: DHTMessageVariant::DHTResponse(DHTResponseSpecific::PingResponse {
+            variant: DHTMessageVariant::DHTResponse(DHTResponseSpecific::Ping {
                 arguments: DHTPingResponseArguments {
                     id: hex::decode("70f923e90771701587b6d36fbb78b3a8047b092e").unwrap(),
                 },

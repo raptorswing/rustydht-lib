@@ -295,7 +295,7 @@ impl Message {
                     }
 
                     ResponseSpecific::PingResponse(ping_args) => {
-                        internal::DHTResponseSpecific::PingResponse {
+                        internal::DHTResponseSpecific::Ping {
                             arguments: internal::DHTPingResponseArguments {
                                 id: ping_args.responder_id.to_vec(),
                             },
@@ -425,7 +425,7 @@ impl Message {
                             })
                         }
 
-                        internal::DHTResponseSpecific::PingResponse { arguments } => {
+                        internal::DHTResponseSpecific::Ping { arguments } => {
                             ResponseSpecific::PingResponse(PingResponseArguments {
                                 responder_id: Id::from_bytes(&arguments.id)?,
                             })

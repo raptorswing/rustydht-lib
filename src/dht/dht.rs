@@ -838,6 +838,9 @@ impl DHT {
                                 .add_or_update(Node::new(their_id, target), true);
                         }
 
+                        // Special handling for find_node responses
+                        // Add the nodes we got back as "seen" (even though we haven't necessarily seen them directly yet).
+                        // They will be pinged later in an attempt to verify them.
                         if let packets::ResponseSpecific::FindNodeResponse(args) = response_variant {
                             let mut state = state.lock().unwrap();
                             for node in &args.nodes {

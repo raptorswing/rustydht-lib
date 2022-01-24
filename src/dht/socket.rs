@@ -187,13 +187,13 @@ impl DHTSocket {
 
                 match request_info {
                     Some(request_info) => {
+                        // It's fine if there's no channel - just means that the sender didn't care about getting a response
                         if let Some(response_channel) = request_info.response_channel {
                             if let Err(e) = response_channel.send(message.clone()).await {
                                 let message = e.0;
                                 warn!(target: "rustydht_lib::DHTSocket", "Got response, but sending code abandoned the channel receiver. So sad. Response: {:?}. Sender: {:?}", message, sender);
                             }
                         }
-                        // It's fine if there's no channel - just means that the sender didn't care about getting a response
 
                         // Since the response is to a valid request, send it to the general recv channel
                         recv_from_tx

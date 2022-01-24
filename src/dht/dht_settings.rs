@@ -71,9 +71,9 @@ pub struct DHTSettings {
     pub routers: Vec<String>,
 }
 
-impl DHTSettings {
-    /// Returns DHTSettings with a default set of options.
-    pub fn default() -> DHTSettings {
+/// Returns DHTSettings with a default set of options.
+impl Default for DHTSettings {
+    fn default() -> Self {
         DHTSettings {
             token_secret_size: 10,
             max_peers_response: 128,
@@ -98,12 +98,6 @@ impl DHTSettings {
                 "dht.transmissionbt.com:6881".to_string(),
             ],
         }
-    }
-}
-
-impl Default for DHTSettings {
-    fn default() -> Self {
-        Self::default()
     }
 }
 
