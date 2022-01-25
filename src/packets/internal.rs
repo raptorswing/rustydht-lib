@@ -32,8 +32,7 @@ impl DHTMessage {
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, RustyDHTError> {
-        serde_bencode::to_bytes(self)
-            .map_err(|err| RustyDHTError::PacketSerializationError(err.into()))
+        serde_bencode::to_bytes(self).map_err(RustyDHTError::PacketSerializationError)
     }
 }
 
@@ -54,31 +53,31 @@ pub enum DHTMessageVariant {
 #[serde(tag = "q")]
 pub enum DHTRequestSpecific {
     #[serde(rename = "ping")]
-    DHTPingRequest {
+    Ping {
         #[serde(rename = "a")]
         arguments: DHTPingArguments,
     },
 
     #[serde(rename = "find_node")]
-    DHTFindNodeRequest {
+    FindNode {
         #[serde(rename = "a")]
         arguments: DHTFindNodeArguments,
     },
 
     #[serde(rename = "get_peers")]
-    DHTGetPeersRequest {
+    GetPeers {
         #[serde(rename = "a")]
         arguments: DHTGetPeersArguments,
     },
 
     #[serde(rename = "announce_peer")]
-    DHTAnnouncePeerRequest {
+    AnnouncePeer {
         #[serde(rename = "a")]
         arguments: DHTAnnouncePeerRequestArguments,
     },
 
     #[serde(rename = "sample_infohashes")]
-    DHTSampleInfoHashesRequest {
+    SampleInfoHashes {
         #[serde(rename = "a")]
         arguments: DHTSampleInfoHashesRequestArguments,
     },
@@ -87,22 +86,22 @@ pub enum DHTRequestSpecific {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(untagged)] // This means order matters! Order these from most to least detailed
 pub enum DHTResponseSpecific {
-    DHTGetPeersResponse {
+    GetPeers {
         #[serde(rename = "r")]
         arguments: DHTGetPeersResponseArguments,
     },
 
-    DHTSampleInfoHashesResponse {
+    SampleInfoHashes {
         #[serde(rename = "r")]
         arguments: DHTSampleInfoHashesResponseArguments,
     },
 
-    DHTFindNodeResponse {
+    FindNode {
         #[serde(rename = "r")]
         arguments: DHTFindNodeResponseArguments,
     },
 
-    DHTPingResponse {
+    Ping {
         #[serde(rename = "r")]
         arguments: DHTPingResponseArguments,
     },
@@ -232,7 +231,7 @@ mod tests {
             transaction_id: vec![0xb5, 0x1b],
             ip: None,
             version: None,
-            variant: DHTMessageVariant::DHTRequest(DHTRequestSpecific::DHTPingRequest {
+            variant: DHTMessageVariant::DHTRequest(DHTRequestSpecific::Ping {
                 arguments: DHTPingArguments {
                     id: hex::decode("70f923e90771701587b6d36fbb78b3a8047b092e").unwrap(),
                 },
@@ -252,7 +251,7 @@ mod tests {
             transaction_id: vec![0xb5, 0x1b],
             ip: Some(hex::decode("48a8858f2014").unwrap()),
             version: Some(hex::decode("5554b3ba").unwrap()),
-            variant: DHTMessageVariant::DHTResponse(DHTResponseSpecific::DHTPingResponse {
+            variant: DHTMessageVariant::DHTResponse(DHTResponseSpecific::Ping {
                 arguments: DHTPingResponseArguments {
                     id: hex::decode("70f22fcfdc27e4ff28f0c00a6a3de0d6c4361ccd").unwrap(),
                 },
@@ -272,7 +271,7 @@ mod tests {
             transaction_id: vec![0xac, 0xc4, 0xe5, 0x2e],
             ip: None,
             version: None,
-            variant: DHTMessageVariant::DHTRequest(DHTRequestSpecific::DHTGetPeersRequest {
+            variant: DHTMessageVariant::DHTRequest(DHTRequestSpecific::GetPeers {
                 arguments: DHTGetPeersArguments {
                     id: hex::decode("287cbd6f580fcf5920aafe67478a0c882ab2ee8e").unwrap(),
                     info_hash: hex::decode("70f986a9fb5a9e8e0bafc62165b7178360332109").unwrap(),
@@ -293,7 +292,7 @@ mod tests {
             transaction_id: vec!(0xa0, 0xbc),
             ip: Some(hex::decode("334f9e687d01").unwrap()),
             version: None,
-            variant: DHTMessageVariant::DHTResponse(DHTResponseSpecific::DHTGetPeersResponse {
+            variant: DHTMessageVariant::DHTResponse(DHTResponseSpecific::GetPeers {
                 arguments: DHTGetPeersResponseArguments {
                     id: hex::decode("70f923e90771701587b6d36fbb78b3a8047b092e").unwrap(),
                     nodes: Some(hex::decode("70e9325426374aff7f909e8f14faeda58d4f9a68b925f813d37f70eeac0aaef80a095f190dfddd17787eec980182578a6199db0d70ee20a15db5e9c7eee898a14d461fb262e9907c47c213fd1ae970ed932dd5335ab19eaa4f1820814662bb1eea025169e8c1bf6670ed65b14cfcbb854b838465950cc00cd97aeb625d68eb4251f670ec53526e4fe3e0bea78e796ece96b024fd749b05c44818cf0870e0c53d2a3899fd53b2e1ffc8afa95374e0d6cdb0099d9c232770e74ed6ae529049f1f1bbe9ebb3a6db3c870ce152150dd9d8be").unwrap()),
@@ -316,7 +315,7 @@ mod tests {
             transaction_id: vec![0x41, 0x16, 0x00, 0x00],
             ip: None,
             version: Some(vec![0x55, 0x54, 0xb3, 0xba]),
-            variant: DHTMessageVariant::DHTRequest(DHTRequestSpecific::DHTFindNodeRequest {
+            variant: DHTMessageVariant::DHTRequest(DHTRequestSpecific::FindNode {
                 arguments: DHTFindNodeArguments {
                     id: hex::decode("93b7d318a5034a01231c86f68f385468e67038c6").unwrap(),
                     target: hex::decode("4800711700005e9e00001b190000391d00005a95").unwrap(),
@@ -337,7 +336,7 @@ mod tests {
                 transaction_id: vec!(0x41, 0x16, 0x00, 0x00),
                 ip: Some(hex::decode("2969788ee79d").unwrap()),
                 version: None,
-                variant: DHTMessageVariant::DHTResponse(DHTResponseSpecific::DHTFindNodeResponse {
+                variant: DHTMessageVariant::DHTResponse(DHTResponseSpecific::FindNode {
                     arguments: DHTFindNodeResponseArguments {
                         id: hex::decode("70f923e90771701587b6d36fbb78b3a8047b092e").unwrap(),
                         nodes: hex::decode("4bcf558e1e7f7543f63f6cd57ca9c50d446e898d5f5499481ae14bf18f4fa61e6fc2a944b024511bfc0f67997eff8e86c3565f854f65edbc03f23184dedf8d8619b0916bbcaca617d5855fc71ae14fb2b2feff1694d9a3ccbda1c68dbe4efb62f08f5f58f6cb1ae142024361c0ecf637b4125af472a8214fe49c9603a93f15571ae142db840f263413b8a8603e1e87fea7cc0bf1bd0c3216850a1ae15b506431ba2475bbe30a243217c091adafe45f563b157ed71f525bc83812fadb89e6d47df829a327b951c9b726a9a93dda2d1ae1").unwrap(),
@@ -358,7 +357,7 @@ mod tests {
             transaction_id: hex::decode("1d4c0100").unwrap(),
             ip: None,
             version: None,
-            variant: DHTMessageVariant::DHTRequest(DHTRequestSpecific::DHTAnnouncePeerRequest {
+            variant: DHTMessageVariant::DHTRequest(DHTRequestSpecific::AnnouncePeer {
                 arguments: DHTAnnouncePeerRequestArguments {
                     id: hex::decode("a4df50d016f245e487bd6c2ce324922b5e2a7e56").unwrap(),
                     info_hash: hex::decode("70f936a4d868a160b3d28e258a949da5269f95dd").unwrap(),
@@ -382,7 +381,7 @@ mod tests {
             transaction_id: hex::decode("fda0a901").unwrap(),
             ip: None,
             version: None,
-            variant: DHTMessageVariant::DHTRequest(DHTRequestSpecific::DHTAnnouncePeerRequest {
+            variant: DHTMessageVariant::DHTRequest(DHTRequestSpecific::AnnouncePeer {
                 arguments: DHTAnnouncePeerRequestArguments {
                     id: hex::decode("4dc3d74ff5133ab5fb45b8e919e5083e516e9e73").unwrap(),
                     info_hash: hex::decode("0dfb5308ef7e64a929d1a836fa40a12eddbfaf12").unwrap(),
@@ -407,7 +406,7 @@ mod tests {
             transaction_id: hex::decode("1d4c0100").unwrap(),
             ip: Some(hex::decode("725c2f242e87").unwrap()),
             version: None,
-            variant: DHTMessageVariant::DHTResponse(DHTResponseSpecific::DHTPingResponse {
+            variant: DHTMessageVariant::DHTResponse(DHTResponseSpecific::Ping {
                 arguments: DHTPingResponseArguments {
                     id: hex::decode("70f923e90771701587b6d36fbb78b3a8047b092e").unwrap(),
                 },
@@ -427,14 +426,12 @@ mod tests {
             transaction_id: vec![0x61, 0x61],
             ip: None,
             version: None,
-            variant: DHTMessageVariant::DHTRequest(
-                DHTRequestSpecific::DHTSampleInfoHashesRequest {
-                    arguments: DHTSampleInfoHashesRequestArguments {
-                        id: hex::decode("0000000000000000000000000000000000000000").unwrap(),
-                        target: hex::decode("bad6487806506bd534e78a8e375e3f59f7bb5ee0").unwrap(),
-                    },
+            variant: DHTMessageVariant::DHTRequest(DHTRequestSpecific::SampleInfoHashes {
+                arguments: DHTSampleInfoHashesRequestArguments {
+                    id: hex::decode("0000000000000000000000000000000000000000").unwrap(),
+                    target: hex::decode("bad6487806506bd534e78a8e375e3f59f7bb5ee0").unwrap(),
                 },
-            ),
+            }),
             read_only: None,
         };
 
@@ -450,7 +447,7 @@ mod tests {
             transaction_id: vec![0x61, 0x61],
             ip: Some(hex::decode("ae886914199c").unwrap()),
             version: None,
-            variant: DHTMessageVariant::DHTResponse(DHTResponseSpecific::DHTSampleInfoHashesResponse {
+            variant: DHTMessageVariant::DHTResponse(DHTResponseSpecific::SampleInfoHashes {
                 arguments: DHTSampleInfoHashesResponseArguments {
                     id: hex::decode("70f923e90771701587b6d36fbb78b3a8047b092e").unwrap(),
                     interval: 10,

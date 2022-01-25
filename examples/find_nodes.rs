@@ -49,7 +49,7 @@ async fn main() {
         .expect("Invalid value for listen port");
 
     let info_hash = Id::from_hex(
-        &cmdline_matches
+        cmdline_matches
             .value_of("info_hash")
             .expect("No value specified for info_hash"),
     )

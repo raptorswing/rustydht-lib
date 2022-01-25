@@ -178,21 +178,11 @@ impl NodeStorage for NodeBucketStorage {
     }
 
     fn get_all_unverified(&self) -> Vec<NodeWrapper> {
-        self.unverified
-            .values()
-            .iter()
-            .copied()
-            .map(|nw| nw.clone())
-            .collect()
+        self.unverified.values().iter().copied().cloned().collect()
     }
 
     fn get_all_verified(&self) -> Vec<NodeWrapper> {
-        self.verified
-            .values()
-            .iter()
-            .copied()
-            .map(|nw| nw.clone())
-            .collect()
+        self.verified.values().iter().copied().cloned().collect()
     }
 
     fn get_nearest_nodes(&self, id: &Id, exclude: Option<&Id>) -> Vec<Node> {
@@ -211,7 +201,7 @@ impl NodeStorage for NodeBucketStorage {
                         return last_verified >= time;
                     }
                     trace!(target: "rustydht_lib::NodeBucketStorage", "Verified {:?} hasn't verified recently. Removing.", nw.node);
-                    return false;
+                    false
                 });
                 self.unverified.retain(|nw| {
                     if let Some(last_verified) = nw.last_verified {
@@ -223,7 +213,7 @@ impl NodeStorage for NodeBucketStorage {
                         return true;
                     }
                     trace!(target: "rustydht_lib::NodeBucketStorage", "Unverified {:?} is dead. Removing", nw.node);
-                    return false;
+                    false
                 });
             }
         }

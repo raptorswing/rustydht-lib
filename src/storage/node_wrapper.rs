@@ -27,7 +27,7 @@ impl NodeWrapper {
     pub fn new(node: Node) -> NodeWrapper {
         let now = std::time::Instant::now();
         NodeWrapper {
-            node: node,
+            node,
             first_seen: now,
             last_seen: now,
             last_verified: None,

@@ -7,7 +7,7 @@ use crate::storage::node_bucket_storage::{NodeBucketStorage, NodeStorage};
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 /// Helps to configure and create new [DHT](crate::dht::DHT) instances.
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub struct DHTBuilder {
     initial_id: Option<Id>,
     listen_addr: Option<SocketAddrV4>,
@@ -19,13 +19,7 @@ pub struct DHTBuilder {
 impl DHTBuilder {
     /// Creates a new DHTBuilder
     pub fn new() -> DHTBuilder {
-        DHTBuilder {
-            initial_id: None,
-            listen_addr: None,
-            ip_source: None,
-            route_table: None,
-            settings: None,
-        }
+        Self::default()
     }
 
     /// Set the initial Id for your DHT node.
@@ -94,7 +88,7 @@ impl DHTBuilder {
                 .unwrap_or_else(|| Box::new(IPV4Consensus::new(2, 10))),
             self.route_table
                 .unwrap_or_else(|| Box::new(NodeBucketStorage::new(Id::ZERO, 8))),
-            self.settings.unwrap_or_else(|| DHTSettings::default()),
+            self.settings.unwrap_or_else(DHTSettings::default),
         )
     }
 }

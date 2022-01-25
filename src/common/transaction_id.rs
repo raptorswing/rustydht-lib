@@ -7,6 +7,6 @@ pub struct TransactionId {
 
 impl From<Vec<u8>> for TransactionId {
     fn from(tid: Vec<u8>) -> Self {
-        return TransactionId { bytes: tid };
+        TransactionId { bytes: tid }
     }
 }

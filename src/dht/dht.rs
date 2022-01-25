@@ -69,7 +69,7 @@ impl DHT {
             .iter()
             .copied()
             .map(|hash| (hash, state.peer_storage.get_peers_info(&hash, newer_than)))
-            .filter(|tup| tup.1.len() > 0)
+            .filter(|tup| !tup.1.is_empty())
             .collect()
     }
 
@@ -145,22 +145,22 @@ impl DHT {
         let token_secret = make_token_secret(settings.token_secret_size);
 
         let dht = DHT {
-            socket: socket,
+            socket,
             state: Arc::new(Mutex::new(DHTState {
-                ip4_source: ip4_source,
-                our_id: our_id,
-                buckets: buckets,
+                ip4_source,
+                our_id,
+                buckets,
                 peer_storage: PeerStorage::new(
                     settings.max_torrents,
                     settings.max_peers_per_torrent,
                 ),
                 token_secret: token_secret.clone(),
                 old_token_secret: token_secret,
-                settings: settings,
+                settings,
                 subscribers: vec![],
             })),
 
-            shutdown: shutdown,
+            shutdown,
         };
 
         Ok(dht)
@@ -185,7 +185,7 @@ impl DHT {
                     "run_event_loop should shutdown"
                 )));
                 self.shutdown.clone().watch().await;
-                return to_ret;
+                to_ret
             }
         ) {
             Ok(_) => Ok(()),
@@ -312,7 +312,7 @@ impl DHT {
                     }
 
                     _ => {
-                        return Err(err.into());
+                        return Err(err);
                     }
                 },
             }
@@ -393,7 +393,7 @@ impl DHT {
                             };
                             let token = calculate_token(&addr, state.token_secret.clone());
 
-                            let reply = match peers.len() {
+                            match peers.len() {
                                 0 => {
                                     let nearest = state.buckets.get_nearest_nodes(
                                         &arguments.info_hash,
@@ -401,7 +401,7 @@ impl DHT {
                                     );
 
                                     MessageBuilder::new_get_peers_response()
-                                        .sender_id(state.our_id.clone())
+                                        .sender_id(state.our_id)
                                         .transaction_id(msg.transaction_id)
                                         .requester_ip(addr)
                                         .token(token.to_vec())
@@ -410,14 +410,13 @@ impl DHT {
                                 }
 
                                 _ => MessageBuilder::new_get_peers_response()
-                                    .sender_id(state.our_id.clone())
+                                    .sender_id(state.our_id)
                                     .transaction_id(msg.transaction_id)
                                     .requester_ip(addr)
                                     .token(token.to_vec())
                                     .peers(peers)
                                     .build()?,
-                            };
-                            reply
+                            }
                         };
                         self.socket
                             .send_to(reply, addr, Some(arguments.requester_id))
@@ -433,7 +432,7 @@ impl DHT {
                                 Some(&arguments.requester_id),
                             );
                             MessageBuilder::new_find_node_response()
-                                .sender_id(state.our_id.clone())
+                                .sender_id(state.our_id)
                                 .transaction_id(msg.transaction_id)
                                 .requester_ip(addr)
                                 .nodes(nearest)
@@ -457,10 +456,10 @@ impl DHT {
 
                             if is_token_valid {
                                 let sockaddr = match arguments.implied_port {
-                                    Some(implied_port) if implied_port == true => addr,
+                                    Some(implied_port) if implied_port => addr,
 
                                     _ => {
-                                        let mut tmp = addr.clone();
+                                        let mut tmp = addr;
                                         tmp.set_port(arguments.port);
                                         tmp
                                     }
@@ -549,7 +548,7 @@ impl DHT {
             }
         }
 
-        return Ok(());
+        Ok(())
     }
 
     async fn send_packet_to_subscribers(&self, msg: packets::Message, _addr: SocketAddr) {
@@ -674,7 +673,7 @@ impl DHT {
 
             // If we don't know anybody, force a router ping.
             // This is helpful if we've been asleep for a while and lost all peers
-            if count_verified <= 0 {
+            if count_verified == 0 {
                 self.ping_routers(shutdown.clone()).await?;
             }
 
@@ -839,19 +838,16 @@ impl DHT {
                                 .add_or_update(Node::new(their_id, target), true);
                         }
 
-                        match response_variant {
-                            // Special handling for find_node responses
-                            // Add the nodes we got back as "seen" (even though we haven't necessarily seen them directly yet).
-                            // They will be pinged later in an attempt to verify them.
-                            packets::ResponseSpecific::FindNodeResponse(args) => {
-                                let mut state = state.lock().unwrap();
-                                for node in &args.nodes {
-                                    if node.id.is_valid_for_ip(&node.address.ip()) {
-                                        state.buckets.add_or_update(node.clone(), false);
-                                    }
+                        // Special handling for find_node responses
+                        // Add the nodes we got back as "seen" (even though we haven't necessarily seen them directly yet).
+                        // They will be pinged later in an attempt to verify them.
+                        if let packets::ResponseSpecific::FindNodeResponse(args) = response_variant {
+                            let mut state = state.lock().unwrap();
+                            for node in &args.nodes {
+                                if node.id.is_valid_for_ip(&node.address.ip()) {
+                                    state.buckets.add_or_update(node.clone(), false);
                                 }
                             }
-                            _ => {}
                         }
 
                         Ok(reply)
@@ -974,12 +970,10 @@ impl DHT {
     /// Adds a 'vote' for whatever IP address the sender says we have.
     fn ip4_vote_helper(state: &mut DHTState, addr: &SocketAddr, msg: &packets::Message) {
         if let IpAddr::V4(their_ip) = addr.ip() {
-            if let Some(they_claim_our_sockaddr) = &msg.requester_ip {
-                if let SocketAddr::V4(they_claim_our_sockaddr) = they_claim_our_sockaddr {
-                    state
-                        .ip4_source
-                        .add_vote(their_ip, they_claim_our_sockaddr.ip().clone());
-                }
+            if let Some(SocketAddr::V4(they_claim_our_sockaddr)) = &msg.requester_ip {
+                state
+                    .ip4_source
+                    .add_vote(their_ip, *they_claim_our_sockaddr.ip());
             }
         }
     }
@@ -1000,7 +994,7 @@ fn calculate_token<T: AsRef<[u8]>>(remote: &SocketAddr, secret: T) -> [u8; 4] {
     digest.write(secret);
     let checksum: u32 = digest.sum32();
 
-    return checksum.to_be_bytes();
+    checksum.to_be_bytes()
 }
 
 fn make_token_secret(size: usize) -> Vec<u8> {

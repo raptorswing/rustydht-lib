@@ -15,7 +15,7 @@ pub const ID_SIZE: usize = 20;
 
 /// Represents the id of a [Node](crate::common::Node) or a BitTorrent info-hash. Basically, it's a
 /// 20-byte identifier.
-#[derive(Eq, PartialEq, Copy, Clone)]
+#[derive(Eq, PartialEq, Hash, Copy, Clone)]
 pub struct Id {
     bytes: [u8; ID_SIZE],
 }
@@ -32,9 +32,7 @@ impl Id {
         }
 
         let mut tmp: [u8; ID_SIZE] = [0; ID_SIZE];
-        for i in 0..ID_SIZE {
-            tmp[i] = bytes[i];
-        }
+        tmp[..ID_SIZE].clone_from_slice(&bytes[..ID_SIZE]);
 
         Ok(Id { bytes: tmp })
     }
@@ -45,19 +43,19 @@ impl Id {
         let mut rng = thread_rng();
         let r: u8 = rng.gen();
 
-        let magic_prefix = IdPrefixMagic::from_ip(&ip, r);
+        let magic_prefix = IdPrefixMagic::from_ip(ip, r);
 
         let mut bytes = [0; ID_SIZE];
 
         bytes[0] = magic_prefix.prefix[0];
         bytes[1] = magic_prefix.prefix[1];
         bytes[2] = (magic_prefix.prefix[2] & 0xf8) | (rng.gen::<u8>() & 0x7);
-        for i in 3..ID_SIZE - 1 {
-            bytes[i] = rng.gen();
+        for item in bytes.iter_mut().take(ID_SIZE - 1).skip(3) {
+            *item = rng.gen();
         }
         bytes[ID_SIZE - 1] = r;
 
-        return Id { bytes: bytes };
+        Id { bytes }
     }
 
     /// Generates a completely random Id. The returned Id is *not* guaranteed to be
@@ -66,7 +64,7 @@ impl Id {
         let mut bytes: [u8; ID_SIZE] = [0; ID_SIZE];
         rng.fill_bytes(&mut bytes);
 
-        return Id { bytes: bytes };
+        Id { bytes }
     }
 
     /// Copies the byes that make up the Id and returns them in a Vec
@@ -84,9 +82,9 @@ impl Id {
             return true;
         }
         let expected = IdPrefixMagic::from_ip(ip, self.bytes[ID_SIZE - 1]);
-        let actual = IdPrefixMagic::from_id(&self);
+        let actual = IdPrefixMagic::from_id(self);
 
-        return expected == actual;
+        expected == actual
     }
 
     /// Returns the number of bits of prefix that the two ids have in common.
@@ -94,7 +92,7 @@ impl Id {
     /// Consider two Ids with binary values `10100000` and `10100100`. This function
     /// would return `5` because the Ids share the common 5-bit prefix `10100`.
     pub fn matching_prefix_bits(&self, other: &Self) -> usize {
-        let xored = self.xor(&other);
+        let xored = self.xor(other);
         let mut to_ret: usize = 0;
 
         for i in 0..ID_SIZE {
@@ -102,14 +100,14 @@ impl Id {
                 .leading_zeros()
                 .try_into()
                 .expect("this should never fail");
-            to_ret = to_ret + leading_zeros;
+            to_ret += leading_zeros;
 
             if leading_zeros < 8 {
                 break;
             }
         }
 
-        return to_ret;
+        to_ret
     }
 
     /// Creates an Id from a hex string.
@@ -128,8 +126,8 @@ impl Id {
     /// Example: `let distance_between_nodes = id.xor(other_id);`
     pub fn xor(&self, other: &Id) -> Id {
         let mut bytes: [u8; ID_SIZE] = [0; ID_SIZE];
-        for i in 0..ID_SIZE {
-            bytes[i] = self.bytes[i] ^ other.bytes[i];
+        for (i, item) in bytes.iter_mut().enumerate().take(ID_SIZE) {
+            *item = self.bytes[i] ^ other.bytes[i];
         }
 
         Id::from_bytes(&bytes).expect("Wrong number of bytes for id")
@@ -140,7 +138,7 @@ impl Id {
     /// `identical_bytes` must be in the range (0, [ID_SIZE](crate::common::ID_SIZE)) otherwise Err
     /// is returned.
     pub fn make_mutant(&self, identical_bytes: usize) -> Result<Id, RustyDHTError> {
-        if identical_bytes <= 0 || identical_bytes >= ID_SIZE {
+        if identical_bytes == 0 || identical_bytes >= ID_SIZE {
             return Err(RustyDHTError::GeneralError(anyhow!(
                 "identical_bytes must be in range (0, ID_SIZE)"
             )));
@@ -170,20 +168,14 @@ impl std::fmt::Debug for Id {
     }
 }
 
-impl std::hash::Hash for Id {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.bytes.hash(state);
-    }
-}
-
 impl PartialOrd for Id {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         for i in 0..self.bytes.len() {
-            if self.bytes[i] < other.bytes[i] {
-                return Some(std::cmp::Ordering::Less);
-            } else if self.bytes[i] > other.bytes[i] {
-                return Some(std::cmp::Ordering::Greater);
-            }
+            match self.bytes[i].cmp(&other.bytes[i]) {
+                std::cmp::Ordering::Less => return Some(std::cmp::Ordering::Less),
+                std::cmp::Ordering::Greater => return Some(std::cmp::Ordering::Greater),
+                _ => continue,
+            };
         }
 
         Some(std::cmp::Ordering::Equal)
@@ -201,12 +193,12 @@ impl IdPrefixMagic {
     // This isn't a way to generate a valid IdPrefixMagic from a random id.
     // For that, use Id::from_ip
     fn from_id(id: &Id) -> IdPrefixMagic {
-        return IdPrefixMagic {
+        IdPrefixMagic {
             prefix: id.bytes[..3]
                 .try_into()
                 .expect("Failed to grab first three bytes of id"),
             suffix: id.bytes[ID_SIZE - 1],
-        };
+        }
     }
 
     fn from_ip(ip: &IpAddr, seed_r: u8) -> IdPrefixMagic {
@@ -217,12 +209,12 @@ impl IdPrefixMagic {
                 let ip_int: u32 = u32::from_be_bytes(ipv4.octets());
                 let nonsense: u32 = (ip_int & magic) | (r32 << 29);
                 let crc: u32 = crc32::checksum_castagnoli(&nonsense.to_be_bytes());
-                return IdPrefixMagic {
+                IdPrefixMagic {
                     prefix: crc.to_be_bytes()[..3]
                         .try_into()
                         .expect("Failed to convert bytes 0-2 of the crc into a 3-byte array"),
                     suffix: seed_r,
-                };
+                }
             }
             IpAddr::V6(ipv6) => {
                 let r64: u64 = seed_r.into();
@@ -234,21 +226,21 @@ impl IdPrefixMagic {
                 );
                 let nonsense: u64 = ip_int & magic | (r64 << 61);
                 let crc: u32 = crc32::checksum_castagnoli(&nonsense.to_be_bytes());
-                return IdPrefixMagic {
+                IdPrefixMagic {
                     prefix: crc.to_be_bytes()[..2].try_into().expect("Failed to poop"),
                     suffix: seed_r,
-                };
+                }
             }
-        };
+        }
     }
 }
 
 impl PartialEq for IdPrefixMagic {
     fn eq(&self, other: &Self) -> bool {
-        return self.prefix[0] == other.prefix[0]
+        self.prefix[0] == other.prefix[0]
             && self.prefix[1] == other.prefix[1]
             && self.prefix[2] & 0xf8 == other.prefix[2] & 0xf8
-            && self.suffix == other.suffix;
+            && self.suffix == other.suffix
     }
 }
 
@@ -311,22 +303,31 @@ mod tests {
         let h1 = Id::from_hex("0000000000000000000000000000000000000001").unwrap();
         let h2 = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
         let h3 = h1.xor(&h2);
-        assert!(h3 == h1);
+        assert_eq!(h3, h1);
 
         let h1 = Id::from_hex("0000000000000000000000000000000000000001").unwrap();
         let h2 = Id::from_hex("0000000000000000000000000000000000000001").unwrap();
         let h3 = h1.xor(&h2);
-        assert!(h3 == Id::from_hex("0000000000000000000000000000000000000000").unwrap());
+        assert_eq!(
+            h3,
+            Id::from_hex("0000000000000000000000000000000000000000").unwrap()
+        );
 
         let h1 = Id::from_hex("1010101010101010101010101010101010101010").unwrap();
         let h2 = Id::from_hex("0101010101010101010101010101010101010101").unwrap();
         let h3 = h1.xor(&h2);
-        assert!(h3 == Id::from_hex("1111111111111111111111111111111111111111").unwrap());
+        assert_eq!(
+            h3,
+            Id::from_hex("1111111111111111111111111111111111111111").unwrap()
+        );
 
         let h1 = Id::from_hex("fefefefefefefefefefefefefefefefefefefefe").unwrap();
         let h2 = Id::from_hex("0505050505050505050505050505050505050505").unwrap();
         let h3 = h1.xor(&h2);
-        assert!(h3 == Id::from_hex("fbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfb").unwrap());
+        assert_eq!(
+            h3,
+            Id::from_hex("fbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfb").unwrap()
+        );
     }
 
     #[test]
@@ -335,31 +336,31 @@ mod tests {
         let h2 = Id::from_hex("0000000000000000000000000000000000000000").unwrap();
         assert!(h1 > h2);
         assert!(h2 < h1);
-        assert!(h1 != h2);
+        assert_ne!(h1, h2);
 
         let h1 = Id::from_hex("00000000000000000000f0000000000000000000").unwrap();
         let h2 = Id::from_hex("000000000000000000000fffffffffffffffffff").unwrap();
         assert!(h1 > h2);
         assert!(h2 < h1);
-        assert!(h1 != h2);
+        assert_ne!(h1, h2);
 
         let h1 = Id::from_hex("1000000000000000000000000000000000000000").unwrap();
         let h2 = Id::from_hex("0fffffffffffffffffffffffffffffffffffffff").unwrap();
         assert!(h1 > h2);
         assert!(h2 < h1);
-        assert!(h1 != h2);
+        assert_ne!(h1, h2);
 
         let h1 = Id::from_hex("1010101010101010101010101010101010101010").unwrap();
         let h2 = Id::from_hex("1010101010101010101010101010101010101010").unwrap();
-        assert!(!(h1 > h2));
-        assert!(!(h2 > h1));
-        assert!(h1 == h2);
+        assert!(h1 <= h2);
+        assert!(h2 <= h1);
+        assert_eq!(h1, h2);
 
         let h1 = Id::from_hex("0000000000000000000000000000000000000010").unwrap();
         let h2 = Id::from_hex("0000000000000000000000000000000000000001").unwrap();
         assert!(h1 > h2);
         assert!(h2 < h1);
-        assert!(h1 != h2);
+        assert_ne!(h1, h2);
     }
 
     #[test]

@@ -40,14 +40,8 @@ pub async fn announce_peer(
         .sender_id(dht.get_id())
         .read_only(dht.get_settings().read_only)
         .target(info_hash)
-        .port(match port {
-            Some(p) => p,
-            None => 0,
-        })
-        .implied_port(match port {
-            Some(_) => false,
-            None => true,
-        });
+        .port(port.unwrap_or(0))
+        .implied_port(port.is_none());
 
     // Prepare to send packets to the nearest 8
     let mut todos = futures::stream::FuturesUnordered::new();
@@ -106,7 +100,7 @@ pub async fn find_node(
     let mut buckets = Buckets::new(target, 8);
     let dht_settings = dht.get_settings();
 
-    if let Err(_) = tokio::time::timeout(timeout, async {
+    let find_node_result = tokio::time::timeout(timeout, async {
         let mut best_ids = Vec::new();
         loop {
             // Seed our buckets with the main buckets from the DHT
@@ -118,12 +112,12 @@ pub async fn find_node(
 
             // Grab a few nodes closest to our target
             let nearest = buckets.get_nearest_nodes(&target, None);
-            if nearest.len() <= 0 {
+            if nearest.is_empty() {
                 // If there are no nodes in the buckets yet, DHT may still be bootstrapping. Give it a moment and try again
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 continue;
             }
-            let best_ids_current: Vec<Id> = nearest.iter().map(|nw| nw.node.id.clone()).collect();
+            let best_ids_current: Vec<Id> = nearest.iter().map(|nw| nw.node.id).collect();
             if best_ids == best_ids_current {
                 break;
             }
@@ -184,8 +178,9 @@ pub async fn find_node(
             }
         }
     })
-    .await
-    {
+    .await;
+
+    if let Err(timeout) = find_node_result {
         debug!(target: "rustydht_lib::operations::find_node", "Timed out after {:?}", timeout);
     }
 
@@ -213,7 +208,7 @@ pub async fn get_peers(
     // Hack to aid in bootstrapping
     find_node(dht, info_hash, Duration::from_secs(5)).await?;
 
-    if let Err(_) = tokio::time::timeout(timeout,
+    let get_peers_result = tokio::time::timeout(timeout,
     async {
         let mut best_ids = Vec::new();
         loop {
@@ -231,7 +226,7 @@ pub async fn get_peers(
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 continue;
             }
-            let best_ids_current: Vec<Id> = nearest.iter().map(|nw| nw.node.id.clone()).collect();
+            let best_ids_current: Vec<Id> = nearest.iter().map(|nw| nw.node.id).collect();
             if best_ids == best_ids_current {
                 break;
             }
@@ -311,7 +306,9 @@ pub async fn get_peers(
                 tokio::time::sleep(needed_sleep_interval).await;
             }
         }
-    }).await {
+    }).await;
+
+    if let Err(timeout) = get_peers_result {
         debug!(target: "rustydht_lib::operations::get_peers", "Timed out after {:?}, returning current results", timeout);
     }
 
@@ -341,9 +338,9 @@ impl GetPeersResult {
             a_dist.partial_cmp(&b_dist).unwrap()
         });
         GetPeersResult {
-            info_hash: info_hash,
-            peers: peers,
-            responders: responders,
+            info_hash,
+            peers,
+            responders,
         }
     }
 
@@ -375,10 +372,7 @@ pub struct GetPeersResponder {
 
 impl GetPeersResponder {
     pub fn new(node: Node, token: Vec<u8>) -> GetPeersResponder {
-        GetPeersResponder {
-            node: node,
-            token: token,
-        }
+        GetPeersResponder { node, token }
     }
 
     pub fn node(self) -> Node {

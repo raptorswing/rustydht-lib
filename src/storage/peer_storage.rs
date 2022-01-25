@@ -16,7 +16,7 @@ pub struct PeerInfo {
 impl PeerInfo {
     fn new(addr: SocketAddr) -> PeerInfo {
         PeerInfo {
-            addr: addr,
+            addr,
             last_updated: std::time::Instant::now(),
         }
     }
@@ -32,7 +32,7 @@ impl PeerStorage {
     pub fn new(max_torrents: usize, max_peers_per_torrent: usize) -> PeerStorage {
         PeerStorage {
             peers: RefCell::new(LruCache::new(max_torrents)),
-            max_peers_per_torrent: max_peers_per_torrent,
+            max_peers_per_torrent,
         }
     }
 
@@ -73,7 +73,7 @@ impl PeerStorage {
                 .iter()
                 .filter(|pi| pi.0.ip().is_ipv4()) // Only return IPv4 for now, you dog!
                 .filter(|pi| newer_than.is_none() || pi.1.last_updated > newer_than.unwrap())
-                .map(|pi| pi.1.clone())
+                .map(|pi| *pi.1)
                 .collect();
             to_ret.append(&mut tmp);
         }
@@ -83,7 +83,7 @@ impl PeerStorage {
 
     pub fn get_info_hashes(&self) -> Vec<Id> {
         let peers = self.peers.borrow();
-        peers.iter().map(|kv| kv.0.clone()).collect()
+        peers.iter().map(|kv| *kv.0).collect()
     }
 }
 

@@ -71,9 +71,9 @@ pub struct DHTSettings {
     pub routers: Vec<String>,
 }
 
-impl DHTSettings {
-    /// Returns DHTSettings with a default set of options.
-    pub fn default() -> DHTSettings {
+/// Returns DHTSettings with a default set of options.
+impl Default for DHTSettings {
+    fn default() -> Self {
         DHTSettings {
             token_secret_size: 10,
             max_peers_response: 128,
@@ -101,7 +101,7 @@ impl DHTSettings {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 /// Builder for DHTSettings
 pub struct DHTSettingsBuilder {
     settings: DHTSettings,
@@ -118,9 +118,7 @@ macro_rules! make_builder_method {
 
 impl DHTSettingsBuilder {
     pub fn new() -> DHTSettingsBuilder {
-        DHTSettingsBuilder {
-            settings: DHTSettings::default(),
-        }
+        Self::default()
     }
 
     make_builder_method!(token_secret_size, usize);

@@ -53,10 +53,10 @@ impl<const NUM_RECORDS: usize> Throttler<NUM_RECORDS> {
     ) -> Throttler<NUM_RECORDS> {
         Throttler {
             records: [ThrottlerRecord::default(); NUM_RECORDS],
-            rate_limit: rate_limit,
-            period: period,
-            naughty_timeout: naughty_timeout,
-            max_tracking: max_tracking,
+            rate_limit,
+            period,
+            naughty_timeout,
+            max_tracking,
         }
     }
 
@@ -83,9 +83,9 @@ impl<const NUM_RECORDS: usize> Throttler<NUM_RECORDS> {
 
             // Keep track of the saddest/lamest record as we go
             if let Some(lame) = &lamest {
-                if record.packets < lame.packets {
-                    lamest = Some(record);
-                } else if record.packets == lame.packets && record.expiration < lame.expiration {
+                if record.packets < lame.packets
+                    || (record.packets == lame.packets && record.expiration < lame.expiration)
+                {
                     lamest = Some(record);
                 }
             } else {
@@ -135,7 +135,7 @@ impl<const NUM_RECORDS: usize> Throttler<NUM_RECORDS> {
     }
 
     pub fn get_num_records(&self) -> usize {
-        return NUM_RECORDS;
+        NUM_RECORDS
     }
 }
 

@@ -68,7 +68,7 @@ impl ShutdownSender {
         if let Err(e) = self.shutdown_tx.send(true) {
             warn!(target: "rustydht_lib::ShutdownSender","Failed to send shutdown signal - likely all tasks are already stopped. Error: {:?}", e);
         }
-        if let Err(_) = self.shutdown_confirm_rx.recv().await {
+        if self.shutdown_confirm_rx.recv().await.is_err() {
             // This error is expected
         }
         info!(target: "rustydht_lib::ShutdownSender","All tasks have stopped");
@@ -90,11 +90,11 @@ pub fn create_shutdown() -> (ShutdownSender, ShutdownReceiver) {
 
     (
         ShutdownSender {
-            shutdown_tx: shutdown_tx,
-            shutdown_confirm_rx: shutdown_confirm_rx,
+            shutdown_tx,
+            shutdown_confirm_rx,
         },
         ShutdownReceiver {
-            shutdown_rx: shutdown_rx,
+            shutdown_rx,
             _shutdown_confirm_tx: shutdown_confirm_tx,
         },
     )

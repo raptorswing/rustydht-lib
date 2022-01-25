@@ -56,7 +56,7 @@ async fn main() {
 
     if let Some(arg) = matches.value_of("initial_id") {
         builder = builder.initial_id(
-            rustydht_lib::common::Id::from_hex(&arg).expect("Failed to parse initial_id into Id"),
+            rustydht_lib::common::Id::from_hex(arg).expect("Failed to parse initial_id into Id"),
         );
     }
 

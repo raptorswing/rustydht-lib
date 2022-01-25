@@ -20,9 +20,9 @@ pub struct Buckets<T: Bucketable> {
 impl<T: Bucketable> Buckets<T> {
     pub fn new(our_id: Id, k: usize) -> Buckets<T> {
         let mut to_ret = Buckets {
-            our_id: our_id,
+            our_id,
             buckets: Vec::with_capacity(32),
-            k: k,
+            k,
         };
 
         to_ret.buckets.push(Vec::new());
@@ -47,7 +47,7 @@ impl<T: Bucketable> Buckets<T> {
     }
 
     pub fn contains(&self, id: &Id) -> bool {
-        let dest_bucket_idx = self.get_dest_bucket_idx_for_id(&id);
+        let dest_bucket_idx = self.get_dest_bucket_idx_for_id(id);
         if let Some(bucket) = self.buckets.get(dest_bucket_idx) {
             for item in bucket.iter() {
                 if item.get_id() == *id {
@@ -61,7 +61,7 @@ impl<T: Bucketable> Buckets<T> {
     pub fn count(&self) -> usize {
         let mut count = 0;
         for bucket in &self.buckets {
-            count = count + bucket.len();
+            count += bucket.len();
         }
 
         count
@@ -72,7 +72,7 @@ impl<T: Bucketable> Buckets<T> {
     }
 
     pub fn get_mut(&mut self, id: &Id) -> Option<&mut T> {
-        let dest_bucket_idx = self.get_dest_bucket_idx_for_id(&id);
+        let dest_bucket_idx = self.get_dest_bucket_idx_for_id(id);
         if let Some(bucket) = self.buckets.get_mut(dest_bucket_idx) {
             for item in bucket.iter_mut() {
                 if item.get_id() == *id {
@@ -91,7 +91,7 @@ impl<T: Bucketable> Buckets<T> {
             .values()
             .iter()
             .filter(|item| exclude.is_none() || *exclude.unwrap() != item.get_id())
-            .map(|item| *item)
+            .copied()
             .collect();
 
         all.sort_unstable_by(|a, b| {
@@ -115,7 +115,7 @@ impl<T: Bucketable> Buckets<T> {
     }
 
     pub fn remove(&mut self, id: &Id) -> Option<T> {
-        let dest_bucket_idx = self.get_dest_bucket_idx_for_id(&id);
+        let dest_bucket_idx = self.get_dest_bucket_idx_for_id(id);
         if let Some(bucket) = self.buckets.get_mut(dest_bucket_idx) {
             for i in 0..bucket.len() {
                 if bucket[i].get_id() == *id {
@@ -176,8 +176,7 @@ impl<T: Bucketable> Buckets<T> {
 
                 // Sort by oldest. Move the newest excess to the chump list
                 if self.buckets[bucket_index].len() > self.k {
-                    self.buckets[bucket_index]
-                        .sort_unstable_by(|a, b| a.get_first_seen().cmp(&b.get_first_seen()));
+                    self.buckets[bucket_index].sort_unstable_by_key(|a| a.get_first_seen());
                     let mut remainder = self.buckets[bucket_index].split_off(self.k);
 
                     if let Some(chump_list) = &mut chump_list {
@@ -185,7 +184,7 @@ impl<T: Bucketable> Buckets<T> {
                     }
                 }
             }
-            bucket_index = bucket_index + 1
+            bucket_index += 1
         }
     }
 }
@@ -209,10 +208,7 @@ mod tests {
                 Instant::now()
             };
 
-            TestWrapper {
-                id: id,
-                first_seen: fs,
-            }
+            TestWrapper { id, first_seen: fs }
         }
     }
 
@@ -269,12 +265,12 @@ mod tests {
         let their_id = Id::from_hex("0000000000000000000000000000000000000001").unwrap();
         storage.add(TestWrapper::new(their_id, None), None);
 
-        assert!(storage.count() == 1);
+        assert_eq!(storage.count(), 1);
         assert!(storage.get_mut(&their_id).is_some());
 
         assert!(storage.remove(&their_id).is_some());
         assert!(storage.remove(&their_id).is_none());
-        assert!(storage.count() == 0);
+        assert_eq!(storage.count(), 0);
     }
 
     /// Tests that we only store a max of k items that have nothing in common with our id
