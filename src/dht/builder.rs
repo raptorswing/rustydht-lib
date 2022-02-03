@@ -88,7 +88,7 @@ impl DHTBuilder {
                 .unwrap_or_else(|| Box::new(IPV4Consensus::new(2, 10))),
             self.route_table
                 .unwrap_or_else(|| Box::new(NodeBucketStorage::new(Id::ZERO, 8))),
-            self.settings.unwrap_or_else(DHTSettings::default),
+            self.settings.unwrap_or_default(),
         )
     }
 }
