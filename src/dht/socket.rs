@@ -234,17 +234,9 @@ impl DHTSocket {
 
     #[cfg(windows)]
     fn should_ignore_error(e: &std::io::Error) -> bool {
-        match e.raw_os_error() {
-            Some(e) => {
-                match e {
-                    // On windows, recv_from fails with this code if the datagram is too big for the buffer.
-                    // We would rather just ignore those datagrams
-                    10040 => true,
-                    _ => false,
-                }
-            }
-            None => false,
-        }
+        // On windows, recv_from fails with this code if the datagram is too big for the buffer.
+        // We would rather just ignore those datagrams
+        matches!(e.raw_os_error(), Some(10040))
     }
 
     #[cfg(not(windows))]
