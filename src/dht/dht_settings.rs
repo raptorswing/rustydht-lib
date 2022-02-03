@@ -1,12 +1,14 @@
 /// Struct that represents configuration for DHT that, in general, does
 /// not change after the DHT is started.
 ///
-/// You'll probably want one of these to pass into [DHT::new()](crate::dht::DHT::new).
+/// You may need one of these to pass into [DHTBuilder](crate::dht::DHTBuilder).
 ///
 /// Use [DHTSettings::default()](crate::dht::DHTSettings::default) to create an instance with the
-/// 'recommended' defaults (which can be customized). Or instantiate your own
-/// with `let settings = DHTSettings {/* your settings here */};`
+/// 'recommended' defaults (which can be customized). Or use [DHTSettingsBuilder](crate::dht::DHTSettingsBuilder)
+/// to construct a customized one. DHTSettings has the [non_exhaustive](https://doc.rust-lang.org/reference/attributes/type_system.html#the-non_exhaustive-attribute)
+/// attribute and can't be constructed directly.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct DHTSettings {
     /// Number of bytes for token secrets for get_peers responses
     pub token_secret_size: usize,

@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 * Cleanup clippy lint findings. Thanks RRRadicalEdward! This change adds to the public API, but doesn't change existing public API.
+* Add non_exhaustive attribute to `DHTSettings`. This is a breaking change in the API (but will prevent future breaking changes).
 
 ## [v3.0.1] - 2022-01-16
 * Fix incompatibility between the code and multithreading. Use `Mutex::lock()` instead of `Mutex::try_lock()`. This was a relic from debugging locking.
