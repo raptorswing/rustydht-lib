@@ -1,6 +1,6 @@
 # rustydht-lib changelog
 
-## [Unreleased]
+## [v4.0.0] - 2022-02-05
 * Cleanup clippy lint findings. Thanks RRRadicalEdward! This change adds to the public API, but doesn't change existing public API.
 * Add non_exhaustive attribute to `DHTSettings`. This is a breaking change in the API (but will prevent future breaking changes).
 * Add packet throttling settings to `DHTSettings`. This change adds to the public API.
@@ -31,7 +31,7 @@
 * Add MessageBuilder, a fluent interface for building Message structs. Remove the old create_ methods for creating Messages. This change makes breaking changes to the public API, and is the reason for the major version bump.
 * Add an example called `dht_node` to the examples/ folder. It runs a DHT node and provides a simple HTTP status page.
 
-[Unreleased]: https://github.com/raptorswing/rustydht-lib/compare/v3.0.1...main
+[v4.0.0]: https://github.com/raptorswing/rustydht-lib/compare/v3.0.1...v4.0.0
 [v3.0.1]: https://github.com/raptorswing/rustydht-lib/compare/v3.0.0...v3.0.1
 [v3.0.0]: https://github.com/raptorswing/rustydht-lib/compare/v2.1.0...v3.0.0
 [v2.1.0]: https://github.com/raptorswing/rustydht-lib/compare/v2.0.1...v2.1.0
