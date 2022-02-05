@@ -71,6 +71,24 @@ pub struct DHTSettings {
     ///
     /// E.g., "router.example.org:6881"
     pub routers: Vec<String>,
+
+    /// The maximum number of packets that will be accepted from an IP (during a [period](crate::dht::DHTSettings::throttle_period_secs))
+    /// before packets from that IP will be temporarily ignored.
+    pub throttle_packet_count: usize,
+
+    /// The number of seconds that the throttler keeps a packet count record for an IP. If the IP sends more
+    /// than [throttle_packet_count](crate::dht::DHTSettings::throttle_packet_count) packets during this period
+    /// then packets from it will be blocked.
+    pub throttle_period_secs: u64,
+
+    /// If the throttler blocks an IP, it will be blocked for at least this amount of time. Every time the blocked
+    /// IP sends another packet, the counter is reset again
+    /// (up to a limit of [throttle_max_tracking_secs](crate::dht::DHTSettings::throttle_max_tracking_secs)).
+    pub throttle_naughty_timeout_secs: u64,
+
+    /// The maximum amount of time that the throttler will keep any record, even if the IP on the
+    /// record is still sending traffic.
+    pub throttle_max_tracking_secs: u64,
 }
 
 /// Returns DHTSettings with a default set of options.
@@ -99,6 +117,10 @@ impl Default for DHTSettings {
                 "router.utorrent.com:6881".to_string(),
                 "dht.transmissionbt.com:6881".to_string(),
             ],
+            throttle_packet_count: 10,
+            throttle_period_secs: 6,
+            throttle_naughty_timeout_secs: 60,
+            throttle_max_tracking_secs: 86400,
         }
     }
 }
@@ -141,6 +163,10 @@ impl DHTSettingsBuilder {
     make_builder_method!(outgoing_reqiest_check_interval_secs, u64);
     make_builder_method!(read_only, bool);
     make_builder_method!(routers, Vec<String>);
+    make_builder_method!(throttle_packet_count, usize);
+    make_builder_method!(throttle_period_secs, u64);
+    make_builder_method!(throttle_naughty_timeout_secs, u64);
+    make_builder_method!(throttle_max_tracking_secs, u64);
 
     pub fn build(self) -> DHTSettings {
         self.settings

@@ -266,12 +266,15 @@ impl DHT {
 
 impl DHT {
     async fn accept_incoming_packets(&self) -> Result<(), RustyDHTError> {
-        let mut throttler = Throttler::<32>::new(
-            10,
-            Duration::from_secs(6),
-            Duration::from_secs(60),
-            Duration::from_secs(86400),
-        );
+        let mut throttler = {
+            let settings = &self.state.lock().unwrap().settings;
+            Throttler::<32>::new(
+                settings.throttle_packet_count,
+                Duration::from_secs(settings.throttle_period_secs),
+                Duration::from_secs(settings.throttle_naughty_timeout_secs),
+                Duration::from_secs(settings.throttle_max_tracking_secs),
+            )
+        };
         let read_only = self.state.lock().unwrap().settings.read_only;
         loop {
             match async {
