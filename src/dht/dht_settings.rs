@@ -105,7 +105,7 @@ impl Default for DHTSettings {
             verify_grace_period_secs: 60,
             get_peers_freshness_secs: 15 * 60,
             find_nodes_interval_secs: 33,
-            find_nodes_skip_count: 32,
+            find_nodes_skip_count: 256,
             max_torrents: 50,
             max_peers_per_torrent: 100,
             ping_check_interval_secs: 10,

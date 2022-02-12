@@ -680,32 +680,42 @@ impl DHT {
                 self.ping_routers(shutdown.clone()).await?;
             }
 
-            // Package things that need state into this block to avoid issues with MutexGuard kept over .await
-            let (nearest_nodes, id_near_us) = {
-                let state = self.state.lock().unwrap();
-                if count_unverified > state.settings.find_nodes_skip_count {
-                    debug!(target: "rustydht_lib::DHT", "Skipping find_node as we already have enough unverified");
-                    continue;
+            let get_nearest_and_ping = |some_id: Id, shutdown: shutdown::ShutdownReceiver| async move {
+                // Package things that need state into this block to avoid issues with MutexGuard kept over .await
+                let nearest_nodes = {
+                    let state = self.state.lock().unwrap();
+                    if count_unverified > state.settings.find_nodes_skip_count {
+                        debug!(target: "rustydht_lib::DHT", "Skipping find_node as we already have enough unverified");
+                        return Ok::<(), RustyDHTError>(());
+                    }
+
+                    let some_id = state.our_id.make_mutant(4).unwrap();
+
+                    // Find the closest nodes to ask
+                    state.buckets.get_nearest_nodes(&some_id, None)
+                };
+                trace!(
+                    target: "rustydht_lib::DHT",
+                    "Sending find_node to {} nodes about {:?}",
+                    nearest_nodes.len(),
+                    some_id
+                );
+                for node in nearest_nodes {
+                    self.find_node_internal(shutdown.clone(), node.address, Some(node.id), some_id)
+                        .await?;
                 }
-
-                let id_near_us = state.our_id.make_mutant(4).unwrap();
-
-                // Find the closest nodes to ask
-                (
-                    state.buckets.get_nearest_nodes(&id_near_us, None),
-                    id_near_us,
-                )
+                Ok(())
             };
-            trace!(
-                target: "rustydht_lib::DHT",
-                "Sending find_node to {} nodes about {:?}",
-                nearest_nodes.len(),
-                id_near_us
-            );
-            for node in nearest_nodes {
-                self.find_node_internal(shutdown.clone(), node.address, Some(node.id), id_near_us)
-                    .await?;
-            }
+
+            let id_near_us = {
+                let state = self.state.lock().unwrap();
+                state.our_id.make_mutant(4).unwrap()
+            };
+
+            let random_id = { Id::from_random(&mut thread_rng()) };
+
+            get_nearest_and_ping(id_near_us, shutdown.clone()).await?;
+            get_nearest_and_ping(random_id, shutdown.clone()).await?;
         }
     }
 
